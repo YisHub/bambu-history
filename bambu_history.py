@@ -100,9 +100,11 @@ def do_login() -> str:
 def get_tasks(token: str) -> list:
     headers = {"Authorization": f"Bearer {token}"}
     tasks, after = [], None
+    total_available = None
 
     while len(tasks) < LIMIT:
-        params = {"limit": min(LIMIT - len(tasks), 50)}
+        page_size = min(LIMIT - len(tasks), 50)
+        params = {"limit": page_size}
         if DEVICE_ID:
             params["deviceId"] = DEVICE_ID
         if after:
@@ -113,10 +115,26 @@ def get_tasks(token: str) -> list:
             headers=headers, params=params, timeout=15,
         )
         r.raise_for_status()
-        hits = r.json().get("hits", [])
-        tasks.extend(hits)
-        if len(hits) < 50:
+        data  = r.json()
+        hits  = data.get("hits", [])
+
+        # La primera página nos dice cuántas hay en total
+        if total_available is None:
+            total_available = data.get("total", float("inf"))
+
+        if not hits:
             break
+
+        tasks.extend(hits)
+
+        # Paramos si ya trajimos todo lo disponible
+        if len(tasks) >= total_available:
+            break
+
+        # Paramos si la página fue más corta de lo pedido (última página)
+        if len(hits) < page_size:
+            break
+
         after = hits[-1]["id"]
 
     return tasks
