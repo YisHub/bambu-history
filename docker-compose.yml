@@ -1,0 +1,6 @@
+services:
+  bambu-history:
+    build: .
+    env_file: .env
+    volumes:
+      - ./output:/output
