@@ -34,7 +34,7 @@ Descarga todas tus impresiones desde la nube, las muestra con thumbnails, filame
 
 ```bash
 # 1. Cloná el repositorio
-git clone https://github.com/tuusuario/bambu-history.git
+git clone https://github.com/YisHub/bambu-history.git
 cd bambu-history
 
 # 2. Copiá y completá la configuración
