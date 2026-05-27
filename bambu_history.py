@@ -125,7 +125,7 @@ def get_tasks(token: str) -> list:
         tasks.extend(hits)
         offset += len(hits)
 
-        if len(hits) < page_size:   # última página
+        if len(hits) < page_size:
             break
 
     return tasks
@@ -135,193 +135,223 @@ def get_tasks(token: str) -> list:
 
 def generate_html(tasks: list) -> str:
     tasks_json = json.dumps(tasks, ensure_ascii=False)
+    n = len(tasks)
     return f"""<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>Bambu Print History</title>
 <style>
-  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-  body {{ background: #0f0f0f; color: #e0e0e0; font-family: system-ui, sans-serif; }}
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{background:#0f0f0f;color:#e0e0e0;font-family:system-ui,sans-serif}}
 
-  /* ── Header ── */
-  header {{
-    position: sticky; top: 0; z-index: 100;
-    background: #1a1a1a; border-bottom: 1px solid #2a2a2a;
-    padding: 12px 24px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-  }}
-  header h1 {{ font-size: 1.05rem; font-weight: 600; color: #fff; flex: 1; }}
-  .btn {{
-    padding: 6px 14px; border-radius: 6px; border: none; cursor: pointer;
-    font-size: 0.82rem; font-weight: 500; transition: background .15s;
-  }}
-  .btn-ghost {{ background: #2a2a2a; color: #ccc; }}
-  .btn-ghost:hover {{ background: #383838; }}
+/* ── Header ── */
+header{{
+  position:sticky;top:0;z-index:200;
+  background:#1a1a1a;border-bottom:1px solid #2a2a2a;
+  padding:11px 22px;display:flex;align-items:center;gap:10px;flex-wrap:wrap
+}}
+header h1{{font-size:1rem;font-weight:600;color:#fff;flex:1;white-space:nowrap}}
+.btn{{padding:6px 13px;border-radius:6px;border:none;cursor:pointer;
+      font-size:.8rem;font-weight:500;transition:background .15s}}
+.btn-ghost{{background:#252525;color:#bbb}}.btn-ghost:hover{{background:#333}}
+.btn-stats{{background:#1a2a1a;color:#4ade80}}.btn-stats:hover{{background:#223322}}
+.btn-stats.active{{background:#0d3d1a;color:#4ade80;outline:1px solid #4ade8055}}
 
-  /* ── Filtros ── */
-  #filter-bar {{
-    background: #161616; border-bottom: 1px solid #242424;
-    padding: 10px 24px; display: flex; gap: 20px; flex-wrap: wrap; align-items: center;
-  }}
-  .filter-group {{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }}
-  .filter-label {{ font-size: 0.72rem; color: #555; text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }}
-  .filter-pill {{
-    padding: 4px 12px; border-radius: 20px; border: 1px solid #333;
-    background: #1e1e1e; color: #aaa; cursor: pointer; font-size: 0.78rem;
-    transition: all .15s; white-space: nowrap;
-  }}
-  .filter-pill:hover {{ border-color: #555; color: #ddd; }}
-  .filter-pill.active {{ background: #00aaff22; border-color: #00aaff; color: #00aaff; }}
-  .color-dot {{
-    width: 22px; height: 22px; border-radius: 50%; cursor: pointer;
-    border: 2px solid #333; transition: transform .15s, border-color .15s;
-    flex-shrink: 0;
-  }}
-  .color-dot:hover {{ transform: scale(1.15); }}
-  .color-dot.active {{ border-color: #fff; transform: scale(1.2); }}
+/* ── Panel de Estadísticas Globales ── */
+#stats-global{{
+  display:none;background:#111;border-bottom:1px solid #252525;padding:22px 24px
+}}
+#stats-global.open{{display:block}}
 
-  /* ── Stats bar ── */
-  #stats-bar {{
-    background: #141414; border-bottom: 1px solid #222;
-    padding: 10px 24px; display: flex; gap: 28px; flex-wrap: wrap; align-items: flex-start;
-  }}
-  .stat {{ display: flex; flex-direction: column; gap: 2px; }}
-  .stat-label {{ color: #555; font-size: 0.7rem; text-transform: uppercase; letter-spacing: .05em; }}
-  .stat-value {{ color: #fff; font-size: 1.05rem; font-weight: 600; }}
-  #stats-bar.empty .stat-value {{ color: #333; }}
+.sg-title{{font-size:.7rem;color:#555;text-transform:uppercase;
+           letter-spacing:.07em;margin-bottom:14px}}
+.overview-grid{{
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));
+  gap:10px;margin-bottom:22px
+}}
+.ov-card{{
+  background:#181818;border:1px solid #252525;border-radius:8px;
+  padding:12px 14px
+}}
+.ov-label{{font-size:.68rem;color:#555;text-transform:uppercase;
+           letter-spacing:.05em;margin-bottom:5px}}
+.ov-value{{font-size:1.05rem;font-weight:600;color:#e0e0e0}}
+.ov-sub{{font-size:.72rem;color:#666;margin-top:2px}}
 
-  /* ── Breakdown ── */
-  #breakdown {{
-    display: none; background: #111; border-bottom: 1px solid #222;
-    padding: 14px 24px;
-  }}
-  #breakdown.visible {{ display: flex; gap: 32px; flex-wrap: wrap; }}
-  .breakdown-section h3 {{
-    font-size: 0.7rem; color: #555; text-transform: uppercase;
-    letter-spacing: .06em; margin-bottom: 10px;
-  }}
-  .breakdown-row {{
-    display: flex; align-items: center; gap: 10px;
-    font-size: 0.8rem; margin-bottom: 6px;
-  }}
-  .breakdown-dot {{ width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }}
-  .breakdown-name {{ color: #bbb; min-width: 60px; }}
-  .breakdown-bar-wrap {{ width: 80px; background: #222; border-radius: 3px; height: 4px; }}
-  .breakdown-bar {{ height: 4px; border-radius: 3px; background: #00aaff; }}
-  .breakdown-val {{ color: #888; font-size: 0.75rem; white-space: nowrap; }}
+.charts-row{{display:grid;grid-template-columns:1fr 1fr;gap:20px}}
+@media(max-width:700px){{.charts-row{{grid-template-columns:1fr}}}}
 
-  /* ── Grid ── */
-  #grid {{
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-    gap: 14px; padding: 20px;
-  }}
-  .card {{
-    background: #1a1a1a; border-radius: 10px; overflow: hidden;
-    border: 2px solid transparent; cursor: pointer;
-    transition: border-color .15s, transform .1s, opacity .15s;
-    user-select: none;
-  }}
-  .card:hover {{ transform: translateY(-2px); border-color: #333; }}
-  .card.selected {{ border-color: #00aaff; background: #111d26; }}
-  .card.hidden {{ display: none; }}
-  .card-img-wrap {{ position: relative; }}
-  .card-img {{
-    width: 100%; aspect-ratio: 1; object-fit: cover;
-    background: #111; display: block;
-  }}
-  .card-img-placeholder {{
-    width: 100%; aspect-ratio: 1; background: #111;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 2.5rem; color: #2a2a2a;
-  }}
-  .check-icon {{
-    position: absolute; top: 8px; right: 8px;
-    width: 22px; height: 22px; border-radius: 50%;
-    background: #00aaff; color: #000;
-    display: none; align-items: center; justify-content: center;
-    font-size: 13px; font-weight: bold;
-  }}
-  .card.selected .check-icon {{ display: flex; }}
-  .card-body {{ padding: 11px; }}
-  .card-title {{
-    font-size: 0.83rem; font-weight: 500; color: #ddd;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    margin-bottom: 7px;
-  }}
-  .card-meta {{ display: flex; flex-direction: column; gap: 4px; font-size: 0.76rem; color: #777; }}
-  .card-meta span {{ display: flex; align-items: center; gap: 6px; }}
-  .filament-dots {{ display: flex; gap: 5px; flex-wrap: wrap; margin-top: 8px; }}
-  .fdot {{
-    display: flex; align-items: center; gap: 4px;
-    background: #242424; border-radius: 20px; padding: 2px 7px 2px 4px;
-    font-size: 0.7rem; color: #999;
-  }}
-  .fdot-circle {{ width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }}
+.chart-box{{background:#161616;border:1px solid #222;border-radius:8px;padding:16px}}
+.chart-box h3{{font-size:.72rem;color:#666;text-transform:uppercase;
+              letter-spacing:.06em;margin-bottom:14px}}
+.chart-row{{display:flex;align-items:center;gap:8px;margin-bottom:9px;font-size:.78rem}}
+.chart-label{{width:90px;color:#aaa;overflow:hidden;text-overflow:ellipsis;
+              white-space:nowrap;flex-shrink:0}}
+.chart-bar-wrap{{flex:1;background:#222;border-radius:3px;height:6px}}
+.chart-bar{{height:6px;border-radius:3px;background:#00aaff;transition:width .4s}}
+.chart-val{{width:70px;text-align:right;color:#666;flex-shrink:0}}
+.color-label-dot{{width:12px;height:12px;border-radius:50%;flex-shrink:0}}
 
-  .badge {{
-    display: inline-block; padding: 2px 8px; border-radius: 20px;
-    font-size: 0.68rem; font-weight: 600;
-  }}
-  .badge-2 {{ background: #0d3d1a; color: #4ade80; }}
-  .badge-3 {{ background: #3d1010; color: #f87171; }}
-  .badge-1 {{ background: #1a2a3d; color: #60a5fa; }}
-  .badge-0, .badge-4 {{ background: #252525; color: #666; }}
+/* ── Filter bar ── */
+#filter-bar{{
+  background:#141414;border-bottom:1px solid #202020;
+  padding:9px 22px;display:flex;gap:18px;flex-wrap:wrap;align-items:center
+}}
+.filter-group{{display:flex;align-items:center;gap:7px;flex-wrap:wrap}}
+.filter-label{{font-size:.68rem;color:#444;text-transform:uppercase;
+              letter-spacing:.05em;white-space:nowrap}}
+.filter-pill{{
+  padding:3px 11px;border-radius:20px;border:1px solid #2a2a2a;
+  background:#1a1a1a;color:#888;cursor:pointer;font-size:.76rem;transition:all .15s
+}}
+.filter-pill:hover{{border-color:#444;color:#ccc}}
+.filter-pill.active{{background:#00aaff18;border-color:#00aaff;color:#00aaff}}
+.color-dot{{
+  width:20px;height:20px;border-radius:50%;cursor:pointer;
+  border:2px solid #2a2a2a;transition:transform .15s,border-color .15s;flex-shrink:0
+}}
+.color-dot:hover{{transform:scale(1.2)}}
+.color-dot.active{{border-color:#fff;transform:scale(1.25)}}
+
+/* ── Barra de selección ── */
+#sel-bar{{
+  background:#131313;border-bottom:1px solid #1e1e1e;
+  padding:9px 22px;display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start
+}}
+.stat{{display:flex;flex-direction:column;gap:2px}}
+.stat-label{{color:#444;font-size:.67rem;text-transform:uppercase;letter-spacing:.05em}}
+.stat-value{{color:#fff;font-size:1rem;font-weight:600}}
+#sel-bar.empty .stat-value{{color:#2a2a2a}}
+.filter-note{{font-size:.7rem;color:#00aaff88;align-self:flex-end;padding-bottom:2px}}
+
+/* ── Breakdown (selección) ── */
+#breakdown{{display:none;background:#0e0e0e;border-bottom:1px solid #1e1e1e;padding:14px 24px}}
+#breakdown.visible{{display:flex;gap:30px;flex-wrap:wrap}}
+.bd-section h3{{font-size:.68rem;color:#444;text-transform:uppercase;
+               letter-spacing:.06em;margin-bottom:10px}}
+.bd-row{{display:flex;align-items:center;gap:8px;font-size:.78rem;margin-bottom:6px}}
+.bd-dot{{width:11px;height:11px;border-radius:50%;flex-shrink:0}}
+.bd-name{{color:#aaa;min-width:55px}}
+.bd-bar-wrap{{width:75px;background:#1e1e1e;border-radius:3px;height:4px}}
+.bd-bar{{height:4px;border-radius:3px;background:#00aaff}}
+.bd-val{{color:#666;font-size:.73rem;white-space:nowrap}}
+
+/* ── Grid ── */
+#grid{{
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(205px,1fr));
+  gap:13px;padding:18px
+}}
+.card{{
+  background:#181818;border-radius:9px;overflow:hidden;
+  border:2px solid transparent;cursor:pointer;
+  transition:border-color .15s,transform .1s;user-select:none
+}}
+.card:hover{{transform:translateY(-2px);border-color:#2a2a2a}}
+.card.selected{{border-color:#00aaff;background:#0f1c29}}
+.card.hidden{{display:none}}
+.card-img-wrap{{position:relative}}
+.card-img{{width:100%;aspect-ratio:1;object-fit:cover;background:#111;display:block}}
+.card-img-placeholder{{
+  width:100%;aspect-ratio:1;background:#111;
+  display:flex;align-items:center;justify-content:center;font-size:2rem;color:#222
+}}
+.check-icon{{
+  position:absolute;top:7px;right:7px;width:20px;height:20px;border-radius:50%;
+  background:#00aaff;color:#000;display:none;align-items:center;
+  justify-content:center;font-size:12px;font-weight:bold
+}}
+.card.selected .check-icon{{display:flex}}
+.card-body{{padding:10px}}
+.card-title{{
+  font-size:.81rem;font-weight:500;color:#ccc;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:6px
+}}
+.card-meta{{display:flex;flex-direction:column;gap:3px;font-size:.74rem;color:#666}}
+.card-meta span{{display:flex;align-items:center;gap:5px}}
+.filament-dots{{display:flex;gap:4px;flex-wrap:wrap;margin-top:7px}}
+.fdot{{
+  display:flex;align-items:center;gap:3px;background:#202020;
+  border-radius:20px;padding:2px 6px 2px 3px;font-size:.68rem;color:#888
+}}
+.fdot-c{{width:9px;height:9px;border-radius:50%;flex-shrink:0}}
+.badge{{display:inline-block;padding:2px 7px;border-radius:20px;font-size:.66rem;font-weight:600}}
+.badge-2{{background:#0d3d1a;color:#4ade80}}
+.badge-3{{background:#3d1010;color:#f87171}}
+.badge-1{{background:#1a2a3d;color:#60a5fa}}
+.badge-0,.badge-4{{background:#222;color:#555}}
 </style>
 </head>
 <body>
 
+<!-- ── Header ── -->
 <header>
   <h1>🖨️ Bambu Print History</h1>
+  <button class="btn btn-stats" id="btn-stats" onclick="toggleStats()">📊 Estadísticas</button>
   <button class="btn btn-ghost" onclick="selectVisible()">Sel. visibles</button>
   <button class="btn btn-ghost" onclick="clearAll()">Limpiar</button>
-  <span id="hdr-count" style="color:#555; font-size:.82rem">{len(tasks)} impresiones</span>
+  <span id="hdr-count" style="color:#444;font-size:.8rem">{n} impresiones</span>
 </header>
 
+<!-- ── Panel estadísticas globales ── -->
+<div id="stats-global">
+  <div class="sg-title">Estadísticas globales — {n} impresiones</div>
+  <div class="overview-grid" id="overview-grid"></div>
+  <div class="charts-row">
+    <div class="chart-box">
+      <h3>Filamento por tipo</h3>
+      <div id="chart-type"></div>
+    </div>
+    <div class="chart-box">
+      <h3>Top colores</h3>
+      <div id="chart-color"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Filtros ── -->
 <div id="filter-bar">
   <div class="filter-group">
-    <span class="filter-label">Filamento</span>
-    <span id="fil-all" class="filter-pill active" onclick="setFilFilter(null)">Todos</span>
-    <!-- generado por JS -->
+    <span class="filter-label">Tipo</span>
+    <span id="fp-all" class="filter-pill active" onclick="setFilFilter(null)">Todos</span>
   </div>
   <div class="filter-group">
     <span class="filter-label">Color</span>
-    <span id="col-all" class="filter-pill active" onclick="setColFilter(null)">Todos</span>
-    <!-- generado por JS -->
+    <span id="cp-all" class="filter-pill active" onclick="setColFilter(null)">Todos</span>
   </div>
 </div>
 
-<div id="stats-bar" class="empty">
+<!-- ── Barra de selección ── -->
+<div id="sel-bar" class="empty">
   <div class="stat"><span class="stat-label">Seleccionadas</span><span class="stat-value" id="s-count">—</span></div>
   <div class="stat"><span class="stat-label">Tiempo total</span><span class="stat-value" id="s-time">—</span></div>
   <div class="stat"><span class="stat-label">Promedio</span><span class="stat-value" id="s-avg">—</span></div>
-  <div class="stat"><span class="stat-label">Filamento total</span><span class="stat-value" id="s-grams">—</span></div>
+  <div class="stat">
+    <span class="stat-label" id="s-grams-label">Filamento total</span>
+    <span class="stat-value" id="s-grams">—</span>
+  </div>
   <div class="stat"><span class="stat-label">Completadas</span><span class="stat-value" id="s-ok">—</span></div>
+  <span class="filter-note" id="filter-note" style="display:none">⚑ Solo filamento filtrado</span>
 </div>
 
+<!-- ── Breakdown por selección ── -->
 <div id="breakdown">
-  <div class="breakdown-section">
-    <h3>Por tipo de filamento</h3>
-    <div id="bd-type"></div>
-  </div>
-  <div class="breakdown-section">
-    <h3>Por color</h3>
-    <div id="bd-color"></div>
-  </div>
+  <div class="bd-section"><h3>Por tipo</h3><div id="bd-type"></div></div>
+  <div class="bd-section"><h3>Por color</h3><div id="bd-color"></div></div>
 </div>
 
+<!-- ── Grid de cards ── -->
 <div id="grid"></div>
 
 <script>
 const tasks = {tasks_json};
 const STATUS = {{0:"Desconocido",1:"En progreso",2:"Completado",3:"Fallido",4:"Cancelado"}};
 
-// ── Utilidades ──────────────────────────────────────────────────────────────
+// ── Utils ────────────────────────────────────────────────────────────────────
 function parseColor(c) {{
   if (!c) return null;
-  const s = c.toString().replace('#','');
-  return '#' + s.slice(0,6);
+  return '#' + c.toString().replace('#','').slice(0,6).toUpperCase();
 }}
 function fmtDuration(s) {{
   if (!s) return "—";
@@ -334,69 +364,153 @@ function fmtDate(iso) {{
   return d.toLocaleDateString("es-AR") + " " + d.toLocaleTimeString("es-AR",{{hour:"2-digit",minute:"2-digit"}});
 }}
 function fmtGrams(g) {{
-  return g >= 1000 ? (g/1000).toFixed(2)+" kg" : g.toFixed(1)+" g";
+  if (g === 0) return "0g";
+  return g >= 1000 ? (g/1000).toFixed(2)+" kg" : g.toFixed(1)+"g";
 }}
 function luminance(hex) {{
-  const r = parseInt(hex.slice(1,3),16)/255;
-  const g = parseInt(hex.slice(3,5),16)/255;
-  const b = parseInt(hex.slice(5,7),16)/255;
-  return 0.299*r + 0.587*g + 0.114*b;
+  const r=parseInt(hex.slice(1,3),16)/255, g=parseInt(hex.slice(3,5),16)/255, b=parseInt(hex.slice(5,7),16)/255;
+  return 0.299*r+0.587*g+0.114*b;
 }}
 
-// ── Índices de filamentos y colores ─────────────────────────────────────────
-const filTypes = new Map();   // type → total grams
-const colMap   = new Map();   // hex → {{hex, type, grams}}
+// ── FIX: gramos respetando el filtro activo ──────────────────────────────────
+function getFilteredGrams(task) {{
+  if (!activeFil && !activeCol) return task.weight || 0;
+  return (task.amsDetailMapping || [])
+    .filter(a => {{
+      const typeOk = !activeFil || a.filamentType === activeFil;
+      const colOk  = !activeCol || parseColor(a.sourceColor) === activeCol;
+      return typeOk && colOk;
+    }})
+    .reduce((sum, a) => sum + (a.weight || 0), 0);
+}}
 
-tasks.forEach(t => {{
-  (t.amsDetailMapping || []).forEach(a => {{
-    if (a.filamentType) {{
-      filTypes.set(a.filamentType, (filTypes.get(a.filamentType)||0) + (a.weight||0));
-    }}
-    const hex = parseColor(a.sourceColor);
-    if (hex) {{
-      const prev = colMap.get(hex) || {{hex, type: a.filamentType||"", grams:0}};
-      prev.grams += (a.weight||0);
-      colMap.set(hex, prev);
-    }}
+// ── Estadísticas globales ────────────────────────────────────────────────────
+function buildGlobalStats() {{
+  const byType  = new Map();
+  const byColor = new Map();
+  let totalSecs = 0, totalGrams = 0, completed = 0, failed = 0;
+
+  tasks.forEach(t => {{
+    totalSecs  += t.costTime || 0;
+    totalGrams += t.weight   || 0;
+    if (t.status === 2) completed++;
+    if (t.status === 3) failed++;
+    (t.amsDetailMapping || []).forEach(a => {{
+      const type = a.filamentType || 'Desconocido';
+      const hex  = parseColor(a.sourceColor) || '#555555';
+      const w    = a.weight || 0;
+      const pt   = byType.get(type)  || {{g:0, count:0}};
+      pt.g += w; pt.count++; byType.set(type, pt);
+      const pc   = byColor.get(hex)  || {{g:0, count:0, hex, type}};
+      pc.g += w; pc.count++; byColor.set(hex, pc);
+    }});
   }});
-}});
+
+  const successPct = tasks.length ? Math.round(completed/tasks.length*100) : 0;
+  const topType    = [...byType.entries()].sort((a,b)=>b[1].g-a[1].g)[0];
+  const topColor   = [...byColor.entries()].sort((a,b)=>b[1].g-a[1].g)[0];
+
+  // Overview cards
+  const cards = [
+    {{label:"Total impresiones", value: tasks.length, sub:"en este historial"}},
+    {{label:"Tiempo total",      value: fmtDuration(totalSecs), sub: "de impresión"}},
+    {{label:"Filamento total",   value: fmtGrams(totalGrams), sub:"en todos los trabajos"}},
+    {{label:"Tasa de éxito",     value: successPct+"%", sub: completed+" completadas"}},
+    {{label:"Fallos",            value: failed, sub: Math.round(failed/tasks.length*100)+"% del total"}},
+    {{label:"Tipo más usado",    value: topType ? topType[0] : "—",
+                                 sub: topType ? fmtGrams(topType[1].g) : ""}},
+    {{label:"Color más usado",   value: topColor ? fmtGrams(topColor[1].g) : "—",
+                                 sub: topColor ? topColor[1].type : "",
+                                 dot: topColor ? topColor[0] : null}},
+    {{label:"Colores distintos", value: byColor.size, sub: byType.size+" tipos de filamento"}},
+  ];
+
+  document.getElementById('overview-grid').innerHTML = cards.map(c => `
+    <div class="ov-card">
+      <div class="ov-label">${{c.label}}</div>
+      <div class="ov-value" style="display:flex;align-items:center;gap:6px">
+        ${{c.dot ? `<span style="width:14px;height:14px;border-radius:50%;background:${{c.dot}};flex-shrink:0"></span>` : ''}}
+        ${{c.value}}
+      </div>
+      ${{c.sub ? `<div class="ov-sub">${{c.sub}}</div>` : ''}}
+    </div>`).join('');
+
+  // Chart tipos
+  const sortedTypes  = [...byType.entries()].sort((a,b)=>b[1].g-a[1].g);
+  const maxTypeG     = sortedTypes[0]?.[1].g || 1;
+  document.getElementById('chart-type').innerHTML = sortedTypes.map(([type, v]) => `
+    <div class="chart-row">
+      <span class="chart-label" title="${{type}}">${{type}}</span>
+      <div class="chart-bar-wrap">
+        <div class="chart-bar" style="width:${{Math.round(v.g/maxTypeG*100)}}%"></div>
+      </div>
+      <span class="chart-val">${{fmtGrams(v.g)}}</span>
+    </div>`).join('');
+
+  // Chart colores (top 15)
+  const sortedColors = [...byColor.entries()].sort((a,b)=>b[1].g-a[1].g).slice(0,15);
+  const maxColorG    = sortedColors[0]?.[1].g || 1;
+  document.getElementById('chart-color').innerHTML = sortedColors.map(([hex, v]) => `
+    <div class="chart-row">
+      <span class="color-label-dot" style="background:${{hex}};border:1px solid #333"></span>
+      <span class="chart-label" title="${{v.type}} ${{hex}}">${{v.type}} <span style="color:#444;font-size:.65rem">${{hex}}</span></span>
+      <div class="chart-bar-wrap">
+        <div class="chart-bar" style="width:${{Math.round(v.g/maxColorG*100)}}%;background:${{hex}}"></div>
+      </div>
+      <span class="chart-val">${{fmtGrams(v.g)}}</span>
+    </div>`).join('');
+}}
+
+function toggleStats() {{
+  const panel = document.getElementById('stats-global');
+  const btn   = document.getElementById('btn-stats');
+  const open  = panel.classList.toggle('open');
+  btn.classList.toggle('active', open);
+}}
 
 // ── Filtros ──────────────────────────────────────────────────────────────────
 let activeFil = null, activeCol = null;
 
 function buildFilters() {{
-  const fg = document.querySelector('#filter-bar .filter-group:nth-child(1)');
-  filTypes.forEach((_, type) => {{
-    const pill = document.createElement('span');
-    pill.className = 'filter-pill';
-    pill.textContent = type;
-    pill.onclick = () => setFilFilter(type);
-    pill.id = 'fp-' + type;
-    fg.appendChild(pill);
+  const byType  = new Map();
+  const byColor = new Map();
+  tasks.forEach(t => {{
+    (t.amsDetailMapping || []).forEach(a => {{
+      if (a.filamentType) byType.set(a.filamentType, true);
+      const hex = parseColor(a.sourceColor);
+      if (hex) byColor.set(hex, a.filamentType || '');
+    }});
   }});
+
+  const fg = document.querySelector('#filter-bar .filter-group:nth-child(1)');
+  byType.forEach((_, type) => {{
+    const p = document.createElement('span');
+    p.className = 'filter-pill'; p.textContent = type;
+    p.id = 'fp-'+type; p.onclick = () => setFilFilter(type);
+    fg.appendChild(p);
+  }});
+
   const cg = document.querySelector('#filter-bar .filter-group:nth-child(2)');
-  colMap.forEach((info, hex) => {{
-    const dot = document.createElement('div');
-    dot.className = 'color-dot';
-    dot.style.background = hex;
-    dot.title = (info.type || '') + ' · ' + fmtGrams(info.grams);
-    dot.onclick = () => setColFilter(hex);
-    dot.id = 'cp-' + hex.slice(1);
-    cg.appendChild(dot);
+  byColor.forEach((type, hex) => {{
+    const d = document.createElement('div');
+    d.className = 'color-dot'; d.style.background = hex;
+    d.title = type + ' ' + hex; d.id = 'cp-'+hex.slice(1);
+    d.onclick = () => setColFilter(hex);
+    cg.appendChild(d);
   }});
 }}
 
 function setFilFilter(type) {{
   activeFil = type;
   document.querySelectorAll('#filter-bar .filter-pill').forEach(p => p.classList.remove('active'));
-  document.getElementById(type ? 'fp-'+type : 'fil-all').classList.add('active');
+  document.getElementById(type ? 'fp-'+type : 'fp-all').classList.add('active');
   applyFilters();
 }}
 function setColFilter(hex) {{
   activeCol = hex;
   document.querySelectorAll('.color-dot').forEach(d => d.classList.remove('active'));
   if (hex) document.getElementById('cp-'+hex.slice(1)).classList.add('active');
-  else document.getElementById('col-all').classList.add('active');
+  else     document.getElementById('cp-all').classList.add('active');
   applyFilters();
 }}
 
@@ -410,38 +524,48 @@ function taskVisible(t) {{
 function applyFilters() {{
   let visible = 0;
   tasks.forEach((t, i) => {{
-    const card = document.querySelector(`[data-idx="${{i}}"]`);
     const show = taskVisible(t);
+    const card = document.querySelector(`[data-idx="${{i}}"]`);
     card.classList.toggle('hidden', !show);
     if (!show && selected.has(i)) {{ selected.delete(i); card.classList.remove('selected'); }}
     if (show) visible++;
   }});
   document.getElementById('hdr-count').textContent = visible + ' impresiones';
+
+  // Actualizar label del grams en sel-bar
+  const note  = document.getElementById('filter-note');
+  const label = document.getElementById('s-grams-label');
+  if (activeFil || activeCol) {{
+    const parts = [activeFil, activeCol].filter(Boolean);
+    label.textContent = 'Filamento (' + parts.join(' + ') + ')';
+    note.style.display = 'inline';
+  }} else {{
+    label.textContent = 'Filamento total';
+    note.style.display = 'none';
+  }}
   updateStats();
 }}
 
 // ── Render cards ─────────────────────────────────────────────────────────────
-function render() {{
-  const grid = document.getElementById("grid");
+function renderCards() {{
+  const grid = document.getElementById('grid');
   tasks.forEach((t, i) => {{
-    const card = document.createElement("div");
-    card.className = "card";
-    card.dataset.idx = i;
+    const card = document.createElement('div');
+    card.className = 'card'; card.dataset.idx = i;
     card.onclick = () => toggle(i);
 
     const imgHtml = t.cover
       ? `<img class="card-img" src="${{t.cover}}" alt="" loading="lazy"
-            onerror="this.parentNode.innerHTML='<div class=card-img-placeholder>🖨️</div>'">`
+             onerror="this.parentNode.innerHTML='<div class=card-img-placeholder>🖨️</div>'">`
       : `<div class="card-img-placeholder">🖨️</div>`;
 
     const ams = t.amsDetailMapping || [];
-    const dotsHtml = ams.length
+    const dots = ams.length
       ? '<div class="filament-dots">' + ams.map(a => {{
           const hex = parseColor(a.sourceColor) || '#555';
-          const fg  = luminance(hex) > 0.5 ? '#111' : '#eee';
           return `<span class="fdot">
-            <span class="fdot-circle" style="background:${{hex}}"></span>
-            <span>${{a.filamentType||'?'}} · ${{a.weight ? a.weight.toFixed(0)+'g' : '—'}}</span>
+            <span class="fdot-c" style="background:${{hex}}"></span>
+            ${{a.filamentType||'?'}} · ${{a.weight ? a.weight.toFixed(0)+'g' : '—'}}
           </span>`;
         }}).join('') + '</div>'
       : '';
@@ -449,29 +573,27 @@ function render() {{
     const s = t.status ?? 0;
     card.innerHTML = `
       <div class="card-img-wrap">
-        ${{imgHtml}}
-        <div class="check-icon">✓</div>
+        ${{imgHtml}}<div class="check-icon">✓</div>
       </div>
       <div class="card-body">
-        <div class="card-title" title="${{t.title||'Sin nombre'}}">${{t.title||'Sin nombre'}}</div>
+        <div class="card-title" title="${{t.title||''}}">${{t.title||'Sin nombre'}}</div>
         <div class="card-meta">
           <span><span class="badge badge-${{s}}">${{STATUS[s]||s}}</span></span>
           <span>📅 ${{fmtDate(t.startTime)}}</span>
           <span>⏱ ${{fmtDuration(t.costTime)}}</span>
         </div>
-        ${{dotsHtml}}
+        ${{dots}}
       </div>`;
     grid.appendChild(card);
   }});
 }}
 
-// ── Selección y stats ────────────────────────────────────────────────────────
+// ── Selección ────────────────────────────────────────────────────────────────
 const selected = new Set();
 
 function toggle(i) {{
-  if (selected.has(i)) selected.delete(i);
-  else selected.add(i);
-  document.querySelector(`[data-idx="${{i}}"]`).classList.toggle("selected", selected.has(i));
+  if (selected.has(i)) selected.delete(i); else selected.add(i);
+  document.querySelector(`[data-idx="${{i}}"]`).classList.toggle('selected', selected.has(i));
   updateStats();
 }}
 function selectVisible() {{
@@ -486,98 +608,71 @@ function clearAll() {{
 }}
 
 function updateStats() {{
-  const bar = document.getElementById('stats-bar');
+  const bar = document.getElementById('sel-bar');
   const bd  = document.getElementById('breakdown');
+
   if (selected.size === 0) {{
     bar.classList.add('empty');
-    ['s-count','s-time','s-avg','s-grams','s-ok'].forEach(id => document.getElementById(id).textContent = '—');
+    ['s-count','s-time','s-avg','s-grams','s-ok'].forEach(id =>
+      document.getElementById(id).textContent = '—');
     bd.classList.remove('visible');
     return;
   }}
   bar.classList.remove('empty');
 
-  const sel = [...selected].map(i => tasks[i]);
-  const totalSecs  = sel.reduce((a,t) => a+(t.costTime||0), 0);
-  const totalGrams = sel.reduce((a,t) => a+(t.weight||0), 0);
-  const completed  = sel.filter(t => t.status===2).length;
+  const sel       = [...selected].map(i => tasks[i]);
+  const totalSecs = sel.reduce((a, t) => a + (t.costTime || 0), 0);
+  const completed = sel.filter(t => t.status === 2).length;
+
+  // ── FIX: usa gramos del filamento filtrado, no el total de la tarea ──────
+  const totalGrams = sel.reduce((sum, t) => sum + getFilteredGrams(t), 0);
 
   document.getElementById('s-count').textContent = selected.size;
   document.getElementById('s-time').textContent  = fmtDuration(totalSecs);
-  document.getElementById('s-avg').textContent   = fmtDuration(Math.round(totalSecs/sel.length));
+  document.getElementById('s-avg').textContent   = fmtDuration(Math.round(totalSecs / sel.length));
   document.getElementById('s-grams').textContent = fmtGrams(totalGrams);
-  document.getElementById('s-ok').textContent    = completed+'/'+sel.length;
+  document.getElementById('s-ok').textContent    = completed + '/' + sel.length;
 
-  // ── Breakdown ──────────────────────────────────────────────────────────
-  const byType  = new Map();
-  const byColor = new Map();
-
+  // ── Breakdown ────────────────────────────────────────────────────────────
+  const btType  = new Map();
+  const btColor = new Map();
   sel.forEach(t => {{
-    (t.amsDetailMapping||[]).forEach(a => {{
+    (t.amsDetailMapping || []).forEach(a => {{
       const type = a.filamentType || 'Desconocido';
-      const hex  = parseColor(a.sourceColor) || '#555';
+      const hex  = parseColor(a.sourceColor) || '#555555';
       const w    = a.weight || 0;
-      byType.set(type,  (byType.get(type)  || {{g:0,n:0}}).g  + w);
-      // re-set properly
-      const pt = byType.get(type) || {{g:0,n:0}};
-      pt.g += w; pt.n++;
-      byType.set(type, pt);
-      const pc = byColor.get(hex) || {{g:0, hex, type}};
-      pc.g += w;
-      byColor.set(hex, pc);
-    }});
-    if (!(t.amsDetailMapping||[]).length) {{
-      const pt = byType.get('Sin datos') || {{g:0,n:0}};
-      pt.n++; byType.set('Sin datos', pt);
-    }}
-  }});
-
-  // quitar la doble suma del primer set
-  const byTypeFinal = new Map();
-  sel.forEach(t => {{
-    (t.amsDetailMapping||[]).forEach(a => {{
-      const type = a.filamentType || 'Desconocido';
-      const prev = byTypeFinal.get(type) || {{g:0}};
-      prev.g += (a.weight||0);
-      byTypeFinal.set(type, prev);
-    }});
-  }});
-  const byColorFinal = new Map();
-  sel.forEach(t => {{
-    (t.amsDetailMapping||[]).forEach(a => {{
-      const hex = parseColor(a.sourceColor)||'#555';
-      const prev = byColorFinal.get(hex) || {{g:0, hex, type: a.filamentType||''}};
-      prev.g += (a.weight||0);
-      byColorFinal.set(hex, prev);
+      const pt   = btType.get(type)  || {{g:0}};  pt.g += w;  btType.set(type, pt);
+      const pc   = btColor.get(hex)  || {{g:0, hex, type}}; pc.g += w; btColor.set(hex, pc);
     }});
   }});
 
-  const maxTypeG  = Math.max(...[...byTypeFinal.values()].map(v=>v.g), 1);
-  const maxColorG = Math.max(...[...byColorFinal.values()].map(v=>v.g), 1);
+  const maxTG = Math.max(...[...btType.values()].map(v=>v.g),  1);
+  const maxCG = Math.max(...[...btColor.values()].map(v=>v.g), 1);
 
-  document.getElementById('bd-type').innerHTML = [...byTypeFinal.entries()]
-    .sort((a,b)=>b[1].g-a[1].g)
-    .map(([type,v]) => `
-      <div class="breakdown-row">
-        <span class="breakdown-name">${{type}}</span>
-        <div class="breakdown-bar-wrap"><div class="breakdown-bar" style="width:${{Math.round(v.g/maxTypeG*100)}}%"></div></div>
-        <span class="breakdown-val">${{fmtGrams(v.g)}}</span>
+  document.getElementById('bd-type').innerHTML = [...btType.entries()]
+    .sort((a,b)=>b[1].g-a[1].g).map(([type,v]) => `
+      <div class="bd-row">
+        <span class="bd-name">${{type}}</span>
+        <div class="bd-bar-wrap"><div class="bd-bar" style="width:${{Math.round(v.g/maxTG*100)}}%"></div></div>
+        <span class="bd-val">${{fmtGrams(v.g)}}</span>
       </div>`).join('');
 
-  document.getElementById('bd-color').innerHTML = [...byColorFinal.entries()]
-    .sort((a,b)=>b[1].g-a[1].g)
-    .map(([hex,v]) => `
-      <div class="breakdown-row">
-        <span class="breakdown-dot" style="background:${{hex}}"></span>
-        <span class="breakdown-name" style="color:#999">${{v.type||'?'}}</span>
-        <div class="breakdown-bar-wrap"><div class="breakdown-bar" style="width:${{Math.round(v.g/maxColorG*100)}}%; background:${{hex}}"></div></div>
-        <span class="breakdown-val">${{fmtGrams(v.g)}}</span>
+  document.getElementById('bd-color').innerHTML = [...btColor.entries()]
+    .sort((a,b)=>b[1].g-a[1].g).map(([hex,v]) => `
+      <div class="bd-row">
+        <span class="bd-dot" style="background:${{hex}}"></span>
+        <span class="bd-name" style="color:#888">${{v.type||'?'}}</span>
+        <div class="bd-bar-wrap"><div class="bd-bar" style="width:${{Math.round(v.g/maxCG*100)}}%;background:${{hex}}"></div></div>
+        <span class="bd-val">${{fmtGrams(v.g)}}</span>
       </div>`).join('');
 
   bd.classList.add('visible');
 }}
 
+// ── Init ─────────────────────────────────────────────────────────────────────
+buildGlobalStats();
 buildFilters();
-render();
+renderCards();
 </script>
 </body>
 </html>"""
