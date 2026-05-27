@@ -66,7 +66,29 @@ docker compose up -d viewer
 
 Queda corriendo en segundo plano en el puerto **8765**. La URL es la misma que imprime el script al terminar.
 
-Apagarlo: `docker compose down`.
+**Auto-apagado**: por defecto el visor se apaga solo a los **30 min** (evita dejar el puerto abierto indefinidamente). Controlable con `VIEWER_TIMEOUT`:
+
+```bash
+# Tenerlo levantado 2 horas
+VIEWER_TIMEOUT=2h docker compose up -d viewer
+
+# Que quede hasta que vos lo apagues
+VIEWER_TIMEOUT=0 docker compose up -d viewer
+```
+
+Apagarlo manualmente: `docker compose down`.
+
+### Auto-refresh del historial
+
+Para que el historial se actualice solo cada N segundos:
+
+```bash
+REFRESH_INTERVAL=300 docker compose up -d bambu-history
+```
+
+El script entra en loop: cada 300s vuelve a pegarle a la cloud de Bambu y regenera el HTML. La página, además, lleva un `<meta refresh>` con el mismo intervalo, así que se recarga sola en el navegador.
+
+> Solo activá el loop **después** de la primera ejecución interactiva (la que pide el código de 6 dígitos). Con el token ya guardado en `data/.bambu_token` no se necesita stdin.
 
 ---
 
@@ -158,7 +180,7 @@ LIMIT=200 docker compose run --rm bambu-history
 BAMBU_DEVICE_ID=03919D573008914 docker compose run --rm bambu-history
 
 # Forzar re-login
-rm output/.bambu_token
+rm data/.bambu_token
 docker compose run --rm bambu-history
 
 # Reconstruir si modificaste el script
@@ -184,11 +206,14 @@ bambu-history/
 ├── requirements.txt
 ├── .env.example            # Plantilla de configuración
 ├── .env                    # Tu configuración ← NO subir a git
+├── data/                   # Token de sesión ← NO subir a git, NO se sirve por HTTP
+│   └── .bambu_token
 └── output/                 # Generado al ejecutar ← NO subir a git
     ├── historial.html      # Visor web
-    ├── historial.json      # Datos en JSON
-    └── .bambu_token        # Token de sesión
+    └── historial.json      # Datos en JSON
 ```
+
+> **Por qué `data/` separado de `output/`**: el visor web sirve `output/` por HTTP sin auth. Si el token estuviera ahí dentro, cualquiera en la LAN podría descargarlo y suplantar tu cuenta de Bambu por ~3 meses. Por eso vive en `data/`, que no se sirve nunca.
 
 ---
 

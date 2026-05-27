@@ -5,13 +5,26 @@ services:
     network_mode: host
     volumes:
       - ./output:/output
+      - ./data:/data
 
   viewer:
     image: python:3.12-alpine
     working_dir: /output
     volumes:
       - ./output:/output:ro
-    command: python -m http.server 8765
+    environment:
+      VIEWER_TIMEOUT: ${VIEWER_TIMEOUT:-30m}
+    # VIEWER_TIMEOUT=0 → sin auto-apagado (queda hasta `docker compose down`)
+    # cualquier otro valor → formato de `timeout` (ej. 30m, 2h, 90s)
+    command:
+      - sh
+      - -c
+      - |
+        if [ "$$VIEWER_TIMEOUT" = "0" ]; then
+          exec python -m http.server 8765
+        else
+          exec timeout "$$VIEWER_TIMEOUT" python -m http.server 8765
+        fi
     ports:
       - "8765:8765"
-    restart: unless-stopped
+    restart: "no"

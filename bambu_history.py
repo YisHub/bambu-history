@@ -2,6 +2,7 @@ import json
 import os
 import socket
 import sys
+import time
 from datetime import datetime
 import requests
 
@@ -12,9 +13,12 @@ DEVICE_ID  = os.getenv("BAMBU_DEVICE_ID", "")
 LIMIT      = int(os.getenv("LIMIT", "100"))
 SAVE_JSON  = os.getenv("SAVE_JSON", "1") == "1"
 OUTPUT_DIR = "/output"
-TOKEN_FILE = f"{OUTPUT_DIR}/.bambu_token"
+DATA_DIR   = "/data"
+TOKEN_FILE = f"{DATA_DIR}/.bambu_token"
+LEGACY_TOKEN_FILE = f"{OUTPUT_DIR}/.bambu_token"
 JSON_FILE  = f"{OUTPUT_DIR}/historial.json"
 HTML_FILE  = f"{OUTPUT_DIR}/historial.html"
+REFRESH_INTERVAL = int(os.getenv("REFRESH_INTERVAL", "0"))
 # ─────────────────────────────────────────────────────────────────────────────
 
 BASE_URL = "https://api.bambulab.com"
@@ -24,12 +28,21 @@ STATUS = {0: "Desconocido", 1: "En progreso", 2: "Completado", 3: "Fallido", 4: 
 # ── TOKEN ─────────────────────────────────────────────────────────────────────
 
 def save_token(token: str):
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(DATA_DIR, exist_ok=True)
     with open(TOKEN_FILE, "w") as f:
         json.dump({"token": token, "saved_at": datetime.now().isoformat()}, f)
     print("  Token guardado en disco.")
 
 def load_token() -> str | None:
+    # Migración one-shot: si hay token viejo en /output, moverlo a /data
+    if not os.path.exists(TOKEN_FILE) and os.path.exists(LEGACY_TOKEN_FILE):
+        try:
+            os.makedirs(DATA_DIR, exist_ok=True)
+            os.replace(LEGACY_TOKEN_FILE, TOKEN_FILE)
+            print(f"  Token migrado: {LEGACY_TOKEN_FILE} → {TOKEN_FILE}")
+        except OSError:
+            # Si /data no está montado (p.ej. instalación vieja), seguir con el legacy
+            return json.load(open(LEGACY_TOKEN_FILE)).get("token")
     if not os.path.exists(TOKEN_FILE):
         return None
     with open(TOKEN_FILE) as f:
@@ -137,11 +150,16 @@ def get_tasks(token: str) -> list:
 def generate_html(tasks: list) -> str:
     tasks_json = json.dumps(tasks, ensure_ascii=False)
     n = len(tasks)
+    refresh_tag = (
+        f'<meta http-equiv="refresh" content="{REFRESH_INTERVAL}">'
+        if REFRESH_INTERVAL > 0 else ''
+    )
     return f"""<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
+{refresh_tag}
 <title>Bambu Print History</title>
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
@@ -691,9 +709,7 @@ renderCards();
 
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 
-def main():
-    token = get_token()
-
+def fetch_and_render(token: str):
     print(f"Obteniendo historial (máx. {LIMIT} trabajos)...")
     tasks = get_tasks(token)
     print(f"{len(tasks)} trabajos encontrados\n")
@@ -714,16 +730,33 @@ def main():
         f.write(html)
     print(f"HTML  → {HTML_FILE}")
 
-    port = os.getenv("VIEWER_PORT", "8765")
+
+def local_ip() -> str:
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect(("192.0.2.1", 1))
-        ip = s.getsockname()[0]
+        return s.getsockname()[0]
     except OSError:
-        ip = "localhost"
+        return "localhost"
     finally:
         s.close()
-    print(f"\nVisor: http://{ip}:{port}/historial.html")
+
+
+def main():
+    token = get_token()
+    port = os.getenv("VIEWER_PORT", "8765")
+    url = f"http://{local_ip()}:{port}/historial.html"
+
+    while True:
+        try:
+            fetch_and_render(token)
+        except Exception as e:
+            print(f"Error en este ciclo: {e}")
+        print(f"\nVisor: {url}")
+        if REFRESH_INTERVAL <= 0:
+            return
+        print(f"Próximo refresh en {REFRESH_INTERVAL}s...\n")
+        time.sleep(REFRESH_INTERVAL)
 
 
 if __name__ == "__main__":
