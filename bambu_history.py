@@ -546,13 +546,27 @@ function applyFilters() {{
   updateStats();
 }}
 
+// ── Selección ────────────────────────────────────────────────────────────────
+const selected = new Set();
+
 // ── Render cards ─────────────────────────────────────────────────────────────
 function renderCards() {{
   const grid = document.getElementById('grid');
   tasks.forEach((t, i) => {{
     const card = document.createElement('div');
     card.className = 'card'; card.dataset.idx = i;
-    card.onclick = () => toggle(i);
+
+    // Use card reference directly — avoids querySelector failures
+    card.addEventListener('click', function() {{
+      if (selected.has(i)) {{
+        selected.delete(i);
+        card.classList.remove('selected');
+      }} else {{
+        selected.add(i);
+        card.classList.add('selected');
+      }}
+      updateStats();
+    }});
 
     const imgHtml = t.cover
       ? `<img class="card-img" src="${{t.cover}}" alt="" loading="lazy"
@@ -563,20 +577,22 @@ function renderCards() {{
     const dots = ams.length
       ? '<div class="filament-dots">' + ams.map(a => {{
           const hex = parseColor(a.sourceColor) || '#555';
+          const safeType = (a.filamentType||'?').replace(/</g,'&lt;');
           return `<span class="fdot">
             <span class="fdot-c" style="background:${{hex}}"></span>
-            ${{a.filamentType||'?'}} · ${{a.weight ? a.weight.toFixed(0)+'g' : '—'}}
+            ${{safeType}} · ${{a.weight ? a.weight.toFixed(0)+'g' : '—'}}
           </span>`;
         }}).join('') + '</div>'
       : '';
 
     const s = t.status ?? 0;
+    const safeTitle = (t.title||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
     card.innerHTML = `
       <div class="card-img-wrap">
         ${{imgHtml}}<div class="check-icon">✓</div>
       </div>
       <div class="card-body">
-        <div class="card-title" title="${{t.title||''}}">${{t.title||'Sin nombre'}}</div>
+        <div class="card-title" title="${{safeTitle}}">${{safeTitle||'Sin nombre'}}</div>
         <div class="card-meta">
           <span><span class="badge badge-${{s}}">${{STATUS[s]||s}}</span></span>
           <span>📅 ${{fmtDate(t.startTime)}}</span>
@@ -586,15 +602,6 @@ function renderCards() {{
       </div>`;
     grid.appendChild(card);
   }});
-}}
-
-// ── Selección ────────────────────────────────────────────────────────────────
-const selected = new Set();
-
-function toggle(i) {{
-  if (selected.has(i)) selected.delete(i); else selected.add(i);
-  document.querySelector(`[data-idx="${{i}}"]`).classList.toggle('selected', selected.has(i));
-  updateStats();
 }}
 function selectVisible() {{
   tasks.forEach((t, i) => {{ if (taskVisible(t)) selected.add(i); }});
@@ -608,6 +615,9 @@ function clearAll() {{
 }}
 
 function updateStats() {{
+  try {{ _updateStats(); }} catch(e) {{ console.error('updateStats error:', e); }}
+}}
+function _updateStats() {{
   const bar = document.getElementById('sel-bar');
   const bd  = document.getElementById('breakdown');
 
