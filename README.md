@@ -48,7 +48,25 @@ docker compose build
 docker compose run --rm bambu-history
 ```
 
-Cuando termine, abrí `output/historial.html` en tu navegador.
+Cuando termine, el script imprime la URL del visor:
+
+```
+Visor: http://192.168.0.235:8765/historial.html
+```
+
+Abrila desde cualquier dispositivo de tu red. Si preferís abrir el HTML directo, está en `output/historial.html`.
+
+### Visor web (opcional)
+
+Para no abrir el HTML a mano cada vez, levantá el visor que sirve la carpeta `output/` por HTTP:
+
+```bash
+docker compose up -d viewer
+```
+
+Queda corriendo en segundo plano en el puerto **8765**. La URL es la misma que imprime el script al terminar.
+
+Apagarlo: `docker compose down`.
 
 ---
 
@@ -145,6 +163,13 @@ docker compose run --rm bambu-history
 
 # Reconstruir si modificaste el script
 docker compose build && docker compose run --rm bambu-history
+
+# Levantar / apagar el visor web
+docker compose up -d viewer
+docker compose down
+
+# Cambiar puerto del visor (cambiar también el mapeo en docker-compose.yml)
+VIEWER_PORT=9000 docker compose run --rm bambu-history
 ```
 
 ---

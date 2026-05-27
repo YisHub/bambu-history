@@ -2,5 +2,16 @@ services:
   bambu-history:
     build: .
     env_file: .env
+    network_mode: host
     volumes:
       - ./output:/output
+
+  viewer:
+    image: python:3.12-alpine
+    working_dir: /output
+    volumes:
+      - ./output:/output:ro
+    command: python -m http.server 8765
+    ports:
+      - "8765:8765"
+    restart: unless-stopped

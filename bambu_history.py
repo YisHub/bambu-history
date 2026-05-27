@@ -1,5 +1,6 @@
 import json
 import os
+import socket
 import sys
 from datetime import datetime
 import requests
@@ -712,8 +713,17 @@ def main():
     with open(HTML_FILE, "w", encoding="utf-8") as f:
         f.write(html)
     print(f"HTML  → {HTML_FILE}")
-    print("\nAbrí el HTML en tu navegador:")
-    print(f"  output\\historial.html")
+
+    port = os.getenv("VIEWER_PORT", "8765")
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("192.0.2.1", 1))
+        ip = s.getsockname()[0]
+    except OSError:
+        ip = "localhost"
+    finally:
+        s.close()
+    print(f"\nVisor: http://{ip}:{port}/historial.html")
 
 
 if __name__ == "__main__":
