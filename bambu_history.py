@@ -742,10 +742,62 @@ def local_ip() -> str:
         s.close()
 
 
+def serve(token: str):
+    """Modo servidor: atiende HTTP y regenera el HTML on-demand si está stale."""
+    from http.server import HTTPServer, SimpleHTTPRequestHandler
+    import threading
+
+    port = int(os.getenv("VIEWER_PORT", "8765"))
+    interval = max(REFRESH_INTERVAL, 60)  # nunca por debajo de 60s para no martirizar la API
+    last_render = 0.0
+    lock = threading.Lock()
+
+    def maybe_refresh():
+        nonlocal last_render
+        with lock:
+            age = time.time() - last_render
+            if last_render == 0.0 or age >= interval:
+                print(f"[refresh] last_render hace {age:.0f}s, regenerando...")
+                try:
+                    fetch_and_render(token)
+                    last_render = time.time()
+                except Exception as e:
+                    print(f"[refresh] error: {e} (sirvo HTML cacheado si existe)")
+
+    maybe_refresh()  # render inicial
+
+    output_dir = OUTPUT_DIR
+
+    class Handler(SimpleHTTPRequestHandler):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, directory=output_dir, **kw)
+
+        def send_head(self):
+            # Defensa en profundidad: nunca servir dotfiles (cubre GET y HEAD)
+            if any(p.startswith(".") for p in self.path.split("/") if p):
+                self.send_error(403)
+                return None
+            if self.path in ("/", "/historial.html"):
+                maybe_refresh()
+            return super().send_head()
+
+        def log_message(self, fmt, *args):
+            print(f"[http] {self.address_string()} {fmt % args}")
+
+    url = f"http://{local_ip()}:{port}/historial.html"
+    print(f"\nVisor live: {url}")
+    print(f"Refresh: cada {interval}s o en cada reload del navegador (lo que pase antes)\n")
+    HTTPServer(("", port), Handler).serve_forever()
+
+
 def main():
     token = get_token()
     port = os.getenv("VIEWER_PORT", "8765")
     url = f"http://{local_ip()}:{port}/historial.html"
+
+    if os.getenv("SERVE", "0") == "1":
+        serve(token)
+        return
 
     while True:
         try:

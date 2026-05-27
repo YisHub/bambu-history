@@ -3,6 +3,12 @@ services:
     build: .
     env_file: .env
     network_mode: host
+    environment:
+      # SERVE=1 → modo live (bambu-history actúa como servidor HTTP y
+      # regenera on-demand). En este modo NO levantes también `viewer`,
+      # porque comparten el puerto 8765.
+      SERVE: ${SERVE:-0}
+      REFRESH_INTERVAL: ${REFRESH_INTERVAL:-0}
     volumes:
       - ./output:/output
       - ./data:/data

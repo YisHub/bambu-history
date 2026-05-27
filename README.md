@@ -80,15 +80,34 @@ Apagarlo manualmente: `docker compose down`.
 
 ### Auto-refresh del historial
 
-Para que el historial se actualice solo cada N segundos:
+Hay dos formas, según qué tan vivo quieras que sea el historial:
+
+**A. Loop simple (regenera siempre, sirvas o no):**
 
 ```bash
 REFRESH_INTERVAL=300 docker compose up -d bambu-history
 ```
 
-El script entra en loop: cada 300s vuelve a pegarle a la cloud de Bambu y regenera el HTML. La página, además, lleva un `<meta refresh>` con el mismo intervalo, así que se recarga sola en el navegador.
+El script entra en loop: cada 300s repollea Bambu Cloud y regenera el HTML. La página lleva un `<meta refresh>` con el mismo intervalo. En este modo el visor estático (`viewer`) sigue sirviendo los archivos.
 
-> Solo activá el loop **después** de la primera ejecución interactiva (la que pide el código de 6 dígitos). Con el token ya guardado en `data/.bambu_token` no se necesita stdin.
+**B. Modo live (recomendado) — refresh cada N seg O al recargar la página:**
+
+```bash
+SERVE=1 REFRESH_INTERVAL=300 docker compose up -d bambu-history
+```
+
+Acá el propio `bambu-history` levanta el servidor HTTP en el puerto **8765** y reemplaza al `viewer`. Cada request a `historial.html` chequea cuán vieja está la data: si pasó más de `REFRESH_INTERVAL` segundos desde la última generación, repollea Bambu Cloud antes de servir.
+
+Ventajas vs. modo A:
+- Si recargás (F5) la página, ves data fresca (no tenés que esperar al próximo tick del loop).
+- Si nadie visita la página, no se desperdician llamadas a la cloud.
+- Mismo puerto, misma URL, sin `viewer` aparte.
+
+> **No corras `viewer` y `bambu-history` con `SERVE=1` al mismo tiempo** — los dos quieren bindear el puerto 8765.
+
+> El piso mínimo de `REFRESH_INTERVAL` en modo live es **60s** (para no martirizar la API de Bambu).
+
+> Solo activá cualquiera de estos modos **después** de la primera ejecución interactiva (la que pide el código de 6 dígitos). Con el token ya guardado en `data/.bambu_token` no se necesita stdin.
 
 ---
 
@@ -186,11 +205,16 @@ docker compose run --rm bambu-history
 # Reconstruir si modificaste el script
 docker compose build && docker compose run --rm bambu-history
 
-# Levantar / apagar el visor web
+# Visor estático (solo sirve el HTML; el script lo regeneras vos cuando querés)
 docker compose up -d viewer
+
+# Visor live: refresh cada 5 min o al recargar la página
+SERVE=1 REFRESH_INTERVAL=300 docker compose up -d bambu-history
+
+# Apagar todo
 docker compose down
 
-# Cambiar puerto del visor (cambiar también el mapeo en docker-compose.yml)
+# Cambiar puerto (cambiar también el mapeo en docker-compose.yml si usás `viewer`)
 VIEWER_PORT=9000 docker compose run --rm bambu-history
 ```
 
