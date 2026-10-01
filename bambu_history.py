@@ -662,7 +662,7 @@ header h1{font-size:15px;font-weight:600;letter-spacing:-.2px;white-space:nowrap
       <div class="sel-row">
         <div class="col">
           <span class="rotulo" style="color:var(--ac-tx)">Horas</span>
-          <span class="num sel-val" id="s-hours">0,00</span>
+          <span class="num sel-val" id="s-hours">0.00</span>
         </div>
         <button class="btn btn-ac" id="btn-copy-h" onclick="copiar('s-hours')" disabled>
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -679,7 +679,7 @@ header h1{font-size:15px;font-weight:600;letter-spacing:-.2px;white-space:nowrap
       <div class="sel-row">
         <div class="col">
           <span class="rotulo" style="color:var(--ac-tx)" id="s-grams-label">Gramos</span>
-          <span class="num sel-val" id="s-grams">0,0</span>
+          <span class="num sel-val" id="s-grams">0.0</span>
         </div>
         <button class="btn btn-ac" id="btn-copy-g" onclick="copiar('s-grams')" disabled>
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -823,10 +823,10 @@ function parseColor(c) {
   if (!c) return null;
   return '#' + c.toString().replace('#','').slice(0,6).toUpperCase();
 }
-// Horas y gramos van en decimal con coma: es lo que se copia y se pega en el
+// Horas y gramos van en decimal con PUNTO: es lo que se copia y se pega en el
 // sistema de ventas, así que el número tiene que salir pelado y listo.
-function fmtHours(secs) { return ((secs || 0) / 3600).toFixed(2).replace('.', ','); }
-function fmtG(g)        { return (g || 0).toFixed(1).replace('.', ','); }
+function fmtHours(secs) { return ((secs || 0) / 3600).toFixed(2); }
+function fmtG(g)        { return (g || 0).toFixed(1); }
 function fmtGrams(g) {
   if (!g) return "0 g";
   return g >= 1000 ? (g/1000).toFixed(2).replace('.', ',') + " kg" : g.toFixed(0) + " g";
@@ -1209,8 +1209,8 @@ function _updateStats() {
   document.getElementById('btn-copy-g').disabled = !n;
 
   if (!n) {
-    hours.textContent = '0,00';
-    grams.textContent = '0,0';
+    hours.textContent = '0.00';
+    grams.textContent = '0.0';
     mats.innerHTML = '<span class="sel-note">Tocá las impresiones para sumarlas.</span>';
     return;
   }
@@ -1242,7 +1242,7 @@ function _updateStats() {
     <div class="mat-row">
       <span class="mat-dot" style="background:${v.hex}"></span>
       <span class="mat-name">${esc(v.type)}</span>
-      <span class="mat-val num">${v.g.toFixed(1).replace('.', ',')} g</span>
+      <span class="mat-val num">${v.g.toFixed(1)} g</span>
     </div>`).join('');
 
   mats.innerHTML = filas + `
