@@ -1,3 +1,4 @@
+import base64
 import io
 import json
 import os
@@ -61,9 +62,18 @@ TOKEN_FILE = f"{DATA_DIR}/.bambu_token"
 LEGACY_TOKEN_FILE = f"{OUTPUT_DIR}/.bambu_token"
 JSON_FILE  = f"{OUTPUT_DIR}/historial.json"
 HTML_FILE  = f"{OUTPUT_DIR}/historial.html"
+PORTABLE_FILE = f"{OUTPUT_DIR}/historial-portable.html"
 COVERS_DIR = f"{OUTPUT_DIR}/covers"
 DB_FILE    = f"{DATA_DIR}/historial.db"          # acumulado histórico (no se sirve por HTTP)
 COVER_QUALITY = int(os.getenv("COVER_QUALITY", "82"))  # calidad WebP de las miniaturas
+# Esfuerzo del compresor WebP (0-6). Medido sobre estas miniaturas de 512x512:
+# method=6 tarda 742 ms por imagen y method=4 tarda 21 ms — 35 veces más rápido
+# para ahorrar 0,1 KB (1,4 %). El 6 no vale lo que cuesta.
+COVER_METHOD  = int(os.getenv("COVER_METHOD", "4"))
+# Las miniaturas se bajan de S3 una por una: es latencia pura, no CPU. En paralelo
+# el tiempo de una corrida con muchas nuevas cae de minutos a segundos.
+COVER_WORKERS = int(os.getenv("COVER_WORKERS", "8"))
+PORTABLE      = os.getenv("PORTABLE", "1") == "1"  # archivo único que abre sin servidor
 REFRESH_INTERVAL = int(os.getenv("REFRESH_INTERVAL", "0"))
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -317,7 +327,7 @@ def to_webp(raw: bytes, dest: str):
         im = im.convert("RGBA")
 
     tmp = f"{dest}.tmp"
-    im.save(tmp, "WEBP", quality=COVER_QUALITY, method=6)
+    im.save(tmp, "WEBP", quality=COVER_QUALITY, method=COVER_METHOD)
     with Image.open(tmp) as check:
         check.verify()
     os.replace(tmp, dest)
@@ -339,9 +349,13 @@ def cache_covers(tasks: list):
     "covers/<id>.webp" (ruta relativa servida desde /output). Si falla, deja la
     URL remota como fallback.
     """
-    os.makedirs(COVERS_DIR, exist_ok=True)
-    downloaded = converted = cached = failed = 0
+    from concurrent.futures import ThreadPoolExecutor
 
+    os.makedirs(COVERS_DIR, exist_ok=True)
+    converted = cached = 0
+    pendientes = []   # (task, id, ruta relativa, destino, url) — se bajan en paralelo
+
+    # Primera pasada: lo que ya está en disco se resuelve sin tocar la red.
     for t in tasks:
         tid = t.get("id")
         if tid is None:
@@ -368,18 +382,31 @@ def cache_covers(tasks: list):
                 print(f"  [cover] no se pudo convertir {tid}: {e}")
 
         url = t.get("cover")
-        if not url or not url.startswith("http"):
-            continue
+        if url and url.startswith("http"):
+            pendientes.append((t, tid, rel, fpath, url))
 
+    # Segunda pasada: descarga en paralelo. Cada hilo escribe su propio archivo y
+    # muta su propia task, así que no hace falta candado.
+    downloaded = failed = 0
+
+    def bajar(item):
+        t, tid, rel, fpath, url = item
         try:
             r = requests.get(url, timeout=20)
             r.raise_for_status()
             to_webp(r.content, fpath)
             t["cover"] = rel
-            downloaded += 1
+            return True
         except (requests.RequestException, OSError, ValueError) as e:
-            failed += 1
             print(f"  [cover] fallo {tid}: {e}")
+            return False
+
+    if pendientes:
+        workers = max(1, min(COVER_WORKERS, len(pendientes)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for ok in pool.map(bajar, pendientes):
+                if ok: downloaded += 1
+                else:  failed += 1
 
     print(f"Miniaturas → {downloaded} nuevas, {converted} convertidas a WebP, "
           f"{cached} en caché, {failed} fallidas")
@@ -1253,18 +1280,85 @@ window.addEventListener('resize', () => {
 </html>"""
 
 
-def generate_html(tasks: list) -> str:
+# Lo único que el visor lee de cada trabajo. Lo que devuelve la nube trae mucho
+# más: el campo `extention` solo son 704 KB (el 70 % del JSON) de URLs firmadas a
+# metadata de MakerWorld que caducan en una hora y que nadie abre nunca. Podando,
+# el HTML pasa de 1,24 MB a 0,15 MB de datos.
+# `id` no lo usa el JS, pero es la clave de las miniaturas y la que va a necesitar
+# cualquier integración posterior (print-roi), así que se conserva.
+CAMPOS_TASK = ("id", "title", "startTime", "status", "costTime", "weight", "cover")
+CAMPOS_AMS  = ("filamentType", "sourceColor", "weight")
+
+
+def slim_tasks(tasks: list) -> list:
+    """Deja solo los campos que el visor usa de verdad."""
+    salida = []
+    for t in tasks:
+        d = {k: t[k] for k in CAMPOS_TASK if k in t}
+        ams = [{k: a[k] for k in CAMPOS_AMS if k in a}
+               for a in (t.get("amsDetailMapping") or [])]
+        if ams:
+            d["amsDetailMapping"] = ams
+        salida.append(d)
+    return salida
+
+
+def inline_covers(tasks: list) -> int:
+    """
+    Reemplaza "covers/<id>.webp" por un data: URI con la imagen adentro. Es lo que
+    convierte al visor en un archivo suelto: sin esto, fuera de su carpeta quedan
+    233 cuadros rotos. Muta la lista recibida (tiene que ser la podada, no la
+    original). Devuelve cuántas quedaron embebidas.
+    """
+    n = descartadas = 0
+    for t in tasks:
+        rel = t.get("cover")
+        if not rel:
+            continue
+
+        datos = None
+        if rel.startswith("covers/"):
+            try:
+                with open(f"{OUTPUT_DIR}/{rel}", "rb") as f:
+                    datos = f.read()
+            except OSError as e:
+                print(f"  [portable] sin miniatura para {t.get('id')}: {e}")
+
+        if datos:
+            t["cover"] = "data:image/webp;base64," + base64.b64encode(datos).decode("ascii")
+            n += 1
+        else:
+            # No se pudo embeber: el `cover` que quedó es la URL firmada de S3 que
+            # trae la nube, y esa caduca a los 30 min. Dejarla haría que el archivo
+            # "portable" dependa de la red para mostrar una imagen que ya no carga,
+            # y encima la firma viajaría adentro del archivo que se comparte.
+            # Mejor sin portada: la card cae sola al placeholder.
+            t.pop("cover", None)
+            descartadas += 1
+
+    return n, descartadas
+
+
+def generate_html(tasks: list, portable: bool = False) -> str:
+    # En el portable no va el auto-refresh: abierto con doble clic no hay servidor
+    # que le sirva una versión nueva, así que solo parpadearía al pedo.
     refresh_tag = (
         f'<meta http-equiv="refresh" content="{REFRESH_INTERVAL}">'
-        if REFRESH_INTERVAL > 0 else ''
+        if REFRESH_INTERVAL > 0 and not portable else ''
     )
+    datos = slim_tasks(tasks)
+    if portable:
+        n, fuera = inline_covers(datos)
+        extra = f", {fuera} descartadas por no tener copia local" if fuera else ""
+        print(f"  {n} miniaturas embebidas{extra}")
+
     # El JSON va último: así nada de lo que venga en los datos se confunde con un marcador
     return (
         HTML_TEMPLATE
         .replace("__REFRESH_TAG__", refresh_tag)
         .replace("__PAGE_SIZE__", str(PAGE_SIZE))
-        .replace("__N__", str(len(tasks)))
-        .replace("__TASKS_JSON__", json.dumps(tasks, ensure_ascii=False))
+        .replace("__N__", str(len(datos)))
+        .replace("__TASKS_JSON__", json.dumps(datos, ensure_ascii=False))
     )
 
 
@@ -1299,7 +1393,15 @@ def fetch_and_render(token: str):
     html = generate_html(tasks)
     with open(HTML_FILE, "w", encoding="utf-8") as f:
         f.write(html)
-    print(f"HTML  → {HTML_FILE}")
+    print(f"HTML  → {HTML_FILE} ({os.path.getsize(HTML_FILE)/1e6:.2f} MB)")
+
+    # Versión de un solo archivo: se abre con doble clic, sin Docker y sin
+    # servidor, y se puede mandar por Telegram tal cual.
+    if PORTABLE:
+        portable_html = generate_html(tasks, portable=True)
+        with open(PORTABLE_FILE, "w", encoding="utf-8") as f:
+            f.write(portable_html)
+        print(f"Único → {PORTABLE_FILE} ({os.path.getsize(PORTABLE_FILE)/1e6:.2f} MB)")
 
 
 def local_ip() -> str:
@@ -1311,6 +1413,13 @@ def local_ip() -> str:
         return "localhost"
     finally:
         s.close()
+
+
+def viewer_urls(port) -> tuple:
+    """(URL local, URL de red). La local es la que sirve a quien lo corre en su
+    propia maquina; la de red es para entrar desde el telefono u otra PC."""
+    return (f"http://localhost:{port}/historial.html",
+            f"http://{local_ip()}:{port}/historial.html")
 
 
 def serve(token: str):
@@ -1355,8 +1464,11 @@ def serve(token: str):
         def log_message(self, fmt, *args):
             print(f"[http] {self.address_string()} {fmt % args}")
 
-    url = f"http://{local_ip()}:{port}/historial.html"
-    print(f"\nVisor live: {url}")
+    local, red = viewer_urls(port)
+    print(f"\n{'=' * 60}")
+    print(f"  Visor live: {local}")
+    print(f"  Desde otro equipo o el telefono: {red}")
+    print(f"{'=' * 60}")
     print(f"Refresh: cada {interval}s o en cada reload del navegador (lo que pase antes)\n")
     HTTPServer(("", port), Handler).serve_forever()
 
@@ -1364,7 +1476,7 @@ def serve(token: str):
 def main():
     token = get_token()
     port = os.getenv("VIEWER_PORT", "8766")
-    url = f"http://{local_ip()}:{port}/historial.html"
+    local, red = viewer_urls(port)
 
     if os.getenv("SERVE", "0") == "1":
         serve(token)
@@ -1375,7 +1487,10 @@ def main():
             fetch_and_render(token)
         except Exception as e:
             print(f"Error en este ciclo: {e}")
-        print(f"\nVisor: {url}")
+        print(f"\n{'=' * 60}")
+        print(f"  Visor: {local}")
+        print(f"  Desde otro equipo o el telefono: {red}")
+        print(f"{'=' * 60}")
         if REFRESH_INTERVAL <= 0:
             return
         print(f"Próximo refresh en {REFRESH_INTERVAL}s...\n")
