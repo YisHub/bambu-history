@@ -30,7 +30,7 @@ Descarga todas tus impresiones desde la nube, las muestra con thumbnails, filame
 - Una cuenta de Bambu Lab
 - [Docker](https://docs.docker.com/engine/install/), **o** Python 3.12+ si preferís correrlo a mano (ver [Correr sin Docker](#correr-sin-docker))
 
-> **Windows**: instalá [Docker Desktop](https://www.docker.com/products/docker-desktop/) con WSL2. Ver [sección Windows](#windows-wsl2) al final.
+> **Windows**: lo más simple es doble clic en `bambu-history.bat`, que no necesita Docker. Ver [sección Windows](#windows) al final.
 
 ---
 
@@ -322,12 +322,14 @@ python bambu_history.py
 ```
 bambu-history/
 ├── bambu_history.py        # Script principal
+├── bambu-history.bat       # Lanzador para Windows (sin Docker)
 ├── Dockerfile
 ├── docker-compose.yml
 ├── requirements.txt
 ├── .env.example            # Plantilla de configuración
 ├── .env                    # Tu configuración ← NO subir a git
 ├── design/                 # Mockups del visor ← local, NO está en el repo
+├── .venv/                  # Lo crea el .bat en Windows ← NO subir a git
 ├── data/                   # ← NO subir a git, NO se sirve por HTTP
 │   ├── .bambu_token        # Token de sesión
 │   └── historial.db        # Acumulado histórico (SQLite) ← la fuente de verdad
@@ -402,10 +404,40 @@ sqlite3 data/historial.db "SELECT start_time, title FROM tasks ORDER BY start_ti
 
 ---
 
-## Windows (WSL2)
+## Windows
+
+Dos caminos. El primero no necesita Docker y es el recomendado para alguien que solo quiere usarlo.
+
+### Opción A: doble clic (sin Docker)
+
+Doble clic en **`bambu-history.bat`**. La primera vez:
+
+1. Si no tenés Python, te avisa y te pasa el link. Instalalo tildando **"Add python.exe to PATH"**.
+2. Crea un entorno virtual en `.venv/` e instala las dependencias por su cuenta.
+3. Si no existe `.env`, lo copia de `.env.example`, lo abre en el Bloc de notas y se detiene: completá `BAMBU_EMAIL` y `BAMBU_PASSWORD`, guardá y volvé a ejecutarlo.
+4. Puede pedir un código de 6 dígitos que llega por mail (ver [Verificación por email](#verificación-por-email-primer-uso)).
+
+Arranca en **modo live**, que es el equivalente a:
+
+```bash
+SERVE=1 REFRESH_INTERVAL=300 docker compose up bambu-history
+```
+
+O sea: sirve el visor y regenera el historial cada 5 minutos, o cuando recargás la página. La ventana tiene que quedar abierta; para cortar, `Ctrl+C` o cerrala.
+
+Las variables del entorno ganan sobre los valores del `.bat`, igual que en Linux:
+
+```bat
+set SERVE=0
+bambu-history.bat
+```
+
+Eso hace una sola pasada y termina, sin levantar el servidor.
+
+### Opción B: Docker Desktop + WSL2
 
 <details>
-<summary>Expandir instrucciones para Windows</summary>
+<summary>Expandir instrucciones</summary>
 
 1. Instalá [Docker Desktop](https://www.docker.com/products/docker-desktop/)
 2. En Docker Desktop → Settings → Resources → WSL Integration → activá tu distro

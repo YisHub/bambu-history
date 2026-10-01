@@ -7,3 +7,6 @@ __pycache__/
 # Mockups del visor: quedan en la máquina, no en el repo. Llevan miniaturas y
 # títulos reales de impresiones, que son datos del taller y no del proyecto.
 design/
+
+notas/
+.venv/
