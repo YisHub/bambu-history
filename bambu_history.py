@@ -49,6 +49,17 @@ if not EMAIL or not PASSWORD:
     print("Ponelos en el .env (copiá .env.example) o exportalos en el entorno.")
     sys.exit(1)
 
+# Los valores de ejemplo del .env.example pasan el chequeo de "no vacío" y
+# terminaban en un intento de login real que moria con un traceback. Para quien
+# copia el .env y se olvida de completarlo, ese stack trace no dice nada.
+if EMAIL in ("tu@email.com", "tuemail@email.com") or PASSWORD == "tupassword":
+    print("Error: el .env todavía tiene los valores de ejemplo.")
+    print(f"  BAMBU_EMAIL    = {EMAIL}")
+    print("  BAMBU_PASSWORD = (sin cambiar)")
+    print("\nAbrí el archivo .env y poné el email y la contraseña de tu cuenta")
+    print("de Bambu Lab, guardá, y volvé a ejecutar.")
+    sys.exit(1)
+
 DEVICE_ID  = os.getenv("BAMBU_DEVICE_ID", "")
 LIMIT      = int(os.getenv("LIMIT", "100"))
 PAGE_SIZE  = os.getenv("PAGE_SIZE", "auto").strip().lower()  # "auto" = llenar la pantalla
@@ -142,6 +153,14 @@ def do_login() -> str:
         f"{BASE_URL}/v1/user-service/user/login",
         json={"account": EMAIL, "password": PASSWORD}, timeout=15,
     )
+    if r.status_code in (400, 401):
+        # El caso tipico: email o contraseña mal. Un traceback acá no ayuda a
+        # nadie, y menos a quien lo corre con doble clic.
+        print("\nError: Bambu rechazó el usuario o la contraseña.")
+        print("Revisá BAMBU_EMAIL y BAMBU_PASSWORD en el .env.")
+        print("Si entrás bien desde la app o la web, fijate que no haya quedado")
+        print("un espacio de más o comillas alrededor del valor.")
+        sys.exit(1)
     if r.status_code != 200:
         # Recortado a propósito: el cuerpo de una respuesta de login puede traer
         # datos que no conviene dejar en los logs.
