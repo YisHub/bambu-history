@@ -55,10 +55,15 @@ docker compose run --rm bambu-history
 Cuando termine, el script imprime la URL del visor:
 
 ```
-Visor: http://192.168.0.235:8766/historial.html
+============================================================
+  Visor live: http://localhost:8766/historial.html
+  Entrada publica (con login): https://bambu.midominio.com/
+============================================================
 ```
 
-Abrila desde cualquier dispositivo de tu red. Si preferís abrir el HTML directo, está en `output/historial.html`.
+La segunda línea sale solo si configuraste `PUBLIC_URL`. Si preferís abrir el HTML directo, está en `output/historial.html`, y `output/historial-portable.html` es el mismo visor en **un solo archivo** que se abre con doble clic.
+
+> **Por defecto el contenedor no publica ningún puerto** — ver [Acceso y exposición](#acceso-y-exposición).
 
 ### Visor web (opcional)
 
@@ -115,13 +120,51 @@ Ventajas vs. modo A:
 - Si nadie visita la página, no se desperdician llamadas a la cloud.
 - Mismo puerto, misma URL, sin `viewer` aparte.
 
-> **No corras `viewer` y `bambu-history` con `SERVE=1` al mismo tiempo** — los dos quieren bindear el puerto 8766.
+**El auto-refresh solo corre si estás mirando.** La página usa la Page Visibility API: con la pestaña en segundo plano el reloj se frena, y al volver a ella refresca si ya había vencido. Antes esto era un `<meta http-equiv="refresh">`, que recarga igual aunque nadie mire — una pestaña olvidada le pegaba a Bambu toda la noche para nadie.
 
-> **Acceso remoto por Tailscale**: el contenedor usa `network_mode: host`, así que la misma URL funciona con la IP de Tailscale de tu server (`tailscale ip -4`): `http://<tu-ip-tailscale>:8766/historial.html`.
+Resumiendo quién dispara un fetch a la nube:
+
+| Situación | ¿Consulta a Bambu? |
+|---|---|
+| Nadie abre la página | **No** |
+| Alguien la carga | Sí, si pasaron ≥ `REFRESH_INTERVAL` |
+| Pestaña visible | Sí, cada `REFRESH_INTERVAL` |
+| Pestaña en segundo plano | **No**, hasta que vuelvas a ella |
+
+El servicio trae `restart: unless-stopped`, así que arranca con el daemon de Docker (y por lo tanto al bootear) y se repone solo si se cae.
+
+> **No corras `viewer` y `bambu-history` con `SERVE=1` al mismo tiempo** — los dos quieren bindear el puerto 8766.
 
 > El piso mínimo de `REFRESH_INTERVAL` en modo live es **60s** (para no martirizar la API de Bambu).
 
 > Solo activá cualquiera de estos modos **después** de la primera ejecución interactiva (la que pide el código de 6 dígitos). Con el token ya guardado en `data/.bambu_token` no se necesita stdin.
+
+---
+
+## Acceso y exposición
+
+**Por defecto el contenedor no publica ningún puerto.** No está en la red del host ni mapea `8766`, así que el visor **no se ve desde la LAN ni desde Tailscale**. Es a propósito: el visor no pide ninguna credencial, y cualquiera en la red podía abrirlo y ver todo el historial del taller.
+
+Hay dos formas razonables de llegar a él:
+
+**1. Detrás de un reverse proxy con login (lo recomendado).** El proxy resuelve el contenedor por nombre (`http://bambu-history:8766`) sin que haga falta publicar ningún puerto, y pone el login adelante. Poné en el `.env`:
+
+```env
+PUBLIC_URL=https://bambu.midominio.com/
+```
+
+**2. Por IP, en una red en la que confiés.** Descomentá el bloque `ports` del `docker-compose.yml`:
+
+```yaml
+ports:
+  - "${VIEWER_PORT:-8766}:${VIEWER_PORT:-8766}"
+```
+
+> ⚠️ Así queda **abierto y sin contraseña** para cualquiera que alcance ese puerto, Tailscale incluido. El historial lleva títulos de trabajos y miniaturas reales.
+
+La raíz (`/`) sirve el visor. Antes devolvía el listado del directorio, que dejaba ver `historial.json` y `covers/` a quien entrara.
+
+Corriendo **sin Docker** no aplica nada de esto: el script escucha en todas las interfaces del equipo, como cualquier servidor local.
 
 ---
 
@@ -168,6 +211,10 @@ Las que solo hacen falta en casos puntuales:
 | Variable | Para qué |
 |---|---|
 | `SERVE=1` | Modo live: el script sirve el HTTP y regenera al recargar |
+| `PUBLIC_URL` | La URL por la que se entra de verdad (si está detrás de un proxy). Solo cambia el mensaje del arranque |
+| `PORTABLE=0` | No generar `historial-portable.html` (por defecto se genera) |
+| `COVER_METHOD` | Esfuerzo del compresor WebP (0-6, default 4). El 6 tarda 35× más para ahorrar 1,4 % |
+| `COVER_WORKERS` | Descargas de miniaturas en paralelo (default 8) |
 | `REFRESH_INTERVAL` | Segundos entre refrescos (0 = una sola corrida) |
 | `VIEWER_TIMEOUT` | Auto-apagado del servicio `viewer` (`30m` por defecto, `0` = sin apagado) |
 | `OUTPUT_DIR` / `DATA_DIR` | Forzar dónde se guardan los archivos |
@@ -258,16 +305,16 @@ Es la razón de ser del visor, así que va primero y siempre visible:
 
 | Campo | Descripción |
 |---|---|
-| Horas | Suma de la selección, en **decimal** (`17,75`), no en `17 h 45` |
-| Gramos | Suma de la selección, en decimal (`538,6`) |
+| Horas | Suma de la selección, en **decimal** (`17.75`), no en `17 h 45` |
+| Gramos | Suma de la selección, en decimal (`538.6`) |
 | Por material | Desglose por tipo y color — es lo que cambia el precio |
 | N de M | Cuántas seleccionaste sobre cuántas hay filtradas |
 
-Cada número tiene su propio botón **Copiar**, y copia el valor **pelado** (`17,75`, `538,6`), sin unidad, listo para pegar en una celda.
+Cada número tiene su propio botón **Copiar**, y copia el valor **pelado** (`17.75`, `538.6`), sin unidad, listo para pegar en una celda.
 
-> **Coma decimal**: se copia tal cual se ve, con coma. Si tu planilla espera punto, cambiá los dos `.replace('.', ',')` de `fmtHours()` y `fmtG()` en `bambu_history.py`.
+> **Punto decimal**: se copia tal cual se ve, con punto, que es lo que espera el sistema de ventas. Si preferís coma, agregá `.replace('.', ',')` a `fmtHours()` y `fmtG()` en `bambu_history.py`.
 
-> La página se sirve por HTTP plano, donde el navegador no habilita `navigator.clipboard` (solo funciona en contextos seguros). Por eso el copiado cae a un `textarea` temporal, que sí anda por LAN y Tailscale.
+> Si lo servís por HTTP plano, el navegador no habilita `navigator.clipboard` (solo existe en contextos seguros). Por eso el copiado cae a un `textarea` temporal, que anda igual. Detrás de HTTPS usa la API nativa.
 
 ### Estadísticas globales
 
@@ -335,6 +382,7 @@ bambu-history/
 │   └── historial.db        # Acumulado histórico (SQLite) ← la fuente de verdad
 └── output/                 # Generado al ejecutar ← NO subir a git
     ├── historial.html      # Visor web
+    ├── historial-portable.html  # El visor en UN archivo (miniaturas adentro)
     ├── historial.json      # Volcado de la base en JSON
     └── covers/             # Miniaturas cacheadas en WebP (covers/<id>.webp)
 ```
@@ -364,6 +412,26 @@ git grep -n "TU-SERIAL\|TU-IP"                   # buscá lo que no querés publ
 ```
 
 > **Nota honesta**: hasta septiembre de 2026 el serial real de la impresora estaba en `.env.example` y en el README, puesto como si fuera un ejemplo. Se reemplazó, pero **sigue en la historia ya publicada** y en el fork del repo: eso no se puede deshacer sin reescribir historia pública. No es una credencial por sí sola —para la nube hace falta la cuenta, y para el acceso local el código de acceso de la impresora—, pero no conviene repetir el patrón.
+
+---
+
+## El visor portable (un solo archivo)
+
+Además del visor normal, cada corrida genera **`output/historial-portable.html`**: el mismo visor pero con las miniaturas embebidas como `data:` URI. Se abre con doble clic, sin Docker, sin servidor y sin internet.
+
+Pesa **menos** que lo que reemplaza, porque el JSON va podado a los campos que el visor realmente usa:
+
+| | Visor normal | Portable |
+|---|---|---|
+| Archivos | 1 HTML + N miniaturas | **1** |
+| Para 274 trabajos | 0,12 MB + 1,9 MB | **2,76 MB en un archivo** |
+| Necesita | Docker o un servidor | doble clic |
+
+- Si una miniatura no se puede embeber, esa portada se descarta en vez de dejar adentro la URL firmada de S3 (que caduca a los 30 min y apunta a tus modelos privados).
+- No tiene auto-refresh: no hay servidor que le sirva nada nuevo.
+- Se apaga con `PORTABLE=0`.
+
+> ⚠️ Lleva adentro tus miniaturas y los títulos reales de los trabajos. Fijate a quién se lo pasás.
 
 ---
 

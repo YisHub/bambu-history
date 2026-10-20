@@ -6,6 +6,11 @@ services:
     # A proposito NO va en la red del host y NO publica puertos: asi el visor
     # no escucha en la LAN ni en Tailscale. La unica puerta es Cosmos, que
     # resuelve el nombre del contenedor via Docker y exige login.
+    #
+    # Si NO tenes un proxy asi y querias entrar por IP, descomenta esto (y mira
+    # la advertencia del README: el visor no pide ninguna credencial).
+    #ports:
+    #  - "${VIEWER_PORT:-8766}:${VIEWER_PORT:-8766}"
     environment:
       # SERVE=1 → modo live (bambu-history actúa como servidor HTTP y
       # regenera on-demand). En este modo NO levantes también `viewer`,
@@ -16,7 +21,7 @@ services:
       # VIEWER_PORT en tu .env y listo. (Acá el 8765 lo usa pc-agent.)
       VIEWER_PORT: ${VIEWER_PORT:-8766}
       # Para que el log muestre el dominio y no la IP interna de Docker
-      PUBLIC_URL: ${PUBLIC_URL:-https://bambu.jesus14sf.com/}
+      PUBLIC_URL: ${PUBLIC_URL:-}
     # Que quede levantado solo: arranca con el daemon de Docker (y por lo tanto
     # al bootear) y se repone si se cae. Solo tiene sentido con SERVE=1.
     restart: unless-stopped
