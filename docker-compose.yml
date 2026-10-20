@@ -12,6 +12,9 @@ services:
       # El puerto es de cada máquina: si el default está ocupado, ponés
       # VIEWER_PORT en tu .env y listo. (Acá el 8765 lo usa pc-agent.)
       VIEWER_PORT: ${VIEWER_PORT:-8766}
+    # Que quede levantado solo: arranca con el daemon de Docker (y por lo tanto
+    # al bootear) y se repone si se cae. Solo tiene sentido con SERVE=1.
+    restart: unless-stopped
     volumes:
       - ./output:/output
       - ./data:/data

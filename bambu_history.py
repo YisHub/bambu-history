@@ -422,7 +422,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-__REFRESH_TAG__
 <title>Bambu Print History</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <style>
@@ -1106,7 +1105,7 @@ function totalPages() { return Math.max(1, Math.ceil(visibleIdx.length / pageSiz
 function goToPage(p, scroll) {
   page = Math.min(Math.max(1, p), totalPages());
   const y = window.scrollY;
-  location.hash = 'p=' + page;   // sobrevive al <meta refresh> del modo live
+  location.hash = 'p=' + page;   // sobrevive al auto-refresh del modo live
   renderPage();
 
   if (scroll) {
@@ -1268,6 +1267,30 @@ goToPage(pageFromHash(), false);
 ajustarPagina(true);   // segunda pasada, ya con una card real para medir
 updateStats();
 
+// ── Auto-refresh solo si alguien esta mirando ────────────────────────────────
+// Antes esto era <meta http-equiv="refresh">, que recarga igual con la pestaña
+// en segundo plano: una pestaña olvidada seguia consultando a Bambu para nadie.
+// Ahora el reloj corre solo mientras la pestaña esta visible, y al volver a ella
+// se refresca si ya habia vencido.
+const REFRESH_SECS = __REFRESH_SECS__;
+(function autoRefresh() {
+  if (!REFRESH_SECS) return;
+  let t = null, vencimiento = Date.now() + REFRESH_SECS * 1000;
+
+  function programar() {
+    clearTimeout(t);
+    if (document.visibilityState !== 'visible') return;   // en background no corre
+    const falta = vencimiento - Date.now();
+    if (falta <= 0) { location.reload(); return; }
+    t = setTimeout(() => {
+      if (document.visibilityState === 'visible') location.reload();
+    }, falta);
+  }
+
+  document.addEventListener('visibilitychange', programar);
+  programar();
+})();
+
 let resizeT = null;
 window.addEventListener('resize', () => {
   clearTimeout(resizeT);
@@ -1342,10 +1365,9 @@ def inline_covers(tasks: list) -> int:
 def generate_html(tasks: list, portable: bool = False) -> str:
     # En el portable no va el auto-refresh: abierto con doble clic no hay servidor
     # que le sirva una versión nueva, así que solo parpadearía al pedo.
-    refresh_tag = (
-        f'<meta http-equiv="refresh" content="{REFRESH_INTERVAL}">'
-        if REFRESH_INTERVAL > 0 and not portable else ''
-    )
+    # El portable se abre con doble clic: no hay servidor que le sirva nada nuevo,
+    # asi que ahi el auto-refresh queda siempre apagado.
+    refresh_secs = REFRESH_INTERVAL if REFRESH_INTERVAL > 0 and not portable else 0
     datos = slim_tasks(tasks)
     if portable:
         n, fuera = inline_covers(datos)
@@ -1355,7 +1377,7 @@ def generate_html(tasks: list, portable: bool = False) -> str:
     # El JSON va último: así nada de lo que venga en los datos se confunde con un marcador
     return (
         HTML_TEMPLATE
-        .replace("__REFRESH_TAG__", refresh_tag)
+        .replace("__REFRESH_SECS__", str(refresh_secs))
         .replace("__PAGE_SIZE__", str(PAGE_SIZE))
         .replace("__N__", str(len(datos)))
         .replace("__TASKS_JSON__", json.dumps(datos, ensure_ascii=False))
