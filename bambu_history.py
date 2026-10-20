@@ -1438,10 +1438,14 @@ def local_ip() -> str:
 
 
 def viewer_urls(port) -> tuple:
-    """(URL local, URL de red). La local es la que sirve a quien lo corre en su
-    propia maquina; la de red es para entrar desde el telefono u otra PC."""
-    return (f"http://localhost:{port}/historial.html",
-            f"http://{local_ip()}:{port}/historial.html")
+    """
+    (URL local, URL publica). Con PUBLIC_URL definida esa es la unica forma real
+    de entrar: detras de Cosmos el contenedor no publica puerto, asi que la IP
+    que ve local_ip() es la interna de Docker y no le sirve a nadie.
+    """
+    local = f"http://localhost:{port}/historial.html"
+    publica = os.getenv("PUBLIC_URL", "").strip()
+    return (local, publica or f"http://{local_ip()}:{port}/historial.html")
 
 
 def serve(token: str):
@@ -1481,6 +1485,11 @@ def serve(token: str):
                 return None
             if self.path in ("/", "/historial.html"):
                 maybe_refresh()
+            # La raiz sirve el visor. Sin esto se ve el listado del directorio,
+            # que ademas expone historial.json y covers/ a quien entre por el
+            # dominio.
+            if self.path == "/":
+                self.path = "/historial.html"
             return super().send_head()
 
         def log_message(self, fmt, *args):
@@ -1489,7 +1498,7 @@ def serve(token: str):
     local, red = viewer_urls(port)
     print(f"\n{'=' * 60}")
     print(f"  Visor live: {local}")
-    print(f"  Desde otro equipo o el telefono: {red}")
+    print(f"  Entrada publica (con login): {red}")
     print(f"{'=' * 60}")
     print(f"Refresh: cada {interval}s o en cada reload del navegador (lo que pase antes)\n")
     HTTPServer(("", port), Handler).serve_forever()
@@ -1511,7 +1520,7 @@ def main():
             print(f"Error en este ciclo: {e}")
         print(f"\n{'=' * 60}")
         print(f"  Visor: {local}")
-        print(f"  Desde otro equipo o el telefono: {red}")
+        print(f"  Entrada publica (con login): {red}")
         print(f"{'=' * 60}")
         if REFRESH_INTERVAL <= 0:
             return

@@ -2,7 +2,10 @@ services:
   bambu-history:
     build: .
     env_file: .env
-    network_mode: host
+    container_name: bambu-history
+    # A proposito NO va en la red del host y NO publica puertos: asi el visor
+    # no escucha en la LAN ni en Tailscale. La unica puerta es Cosmos, que
+    # resuelve el nombre del contenedor via Docker y exige login.
     environment:
       # SERVE=1 → modo live (bambu-history actúa como servidor HTTP y
       # regenera on-demand). En este modo NO levantes también `viewer`,
@@ -12,6 +15,8 @@ services:
       # El puerto es de cada máquina: si el default está ocupado, ponés
       # VIEWER_PORT en tu .env y listo. (Acá el 8765 lo usa pc-agent.)
       VIEWER_PORT: ${VIEWER_PORT:-8766}
+      # Para que el log muestre el dominio y no la IP interna de Docker
+      PUBLIC_URL: ${PUBLIC_URL:-https://bambu.jesus14sf.com/}
     # Que quede levantado solo: arranca con el daemon de Docker (y por lo tanto
     # al bootear) y se repone si se cae. Solo tiene sentido con SERVE=1.
     restart: unless-stopped
