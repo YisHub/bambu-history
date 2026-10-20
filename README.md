@@ -245,7 +245,13 @@ Código de 6 dígitos: _
 
 Ingresás el código y listo. **Las próximas veces no lo pide** — el token se guarda en `data/.bambu_token`, que no se sirve por HTTP.
 
-> Si el token expira (~3 meses), el script lo detecta y vuelve a pedir el código automáticamente.
+> **Si el token expira (~3 meses)** el script lo detecta y vuelve a autenticarse solo, también corriendo en modo servidor. La trampa: si Bambu pide de nuevo el código de 6 dígitos y el contenedor está en segundo plano (`up -d`), **no hay consola donde escribirlo**. En ese caso lo dice en el log y hay que correr una vez a mano:
+>
+> ```bash
+> docker compose run --rm bambu-history
+> ```
+>
+> Antes esto no existía: al vencer el token, cada refresco fallaba en silencio y el visor seguía mostrando el último HTML generado **para siempre**, sin ninguna señal.
 
 ---
 
@@ -472,8 +478,14 @@ sqlite3 data/historial.db "SELECT start_time, title FROM tasks ORDER BY start_ti
 | Imágenes no cargan en el HTML | Las miniaturas se cachean en `output/covers/<id>.webp`. Si alguna falta, la descarga falló (red/S3 lento): volvé a ejecutar y reintenta solo las que falten |
 | `docker: command not found` | Verificá que Docker esté corriendo |
 | Token expirado (pide código de nuevo) | Normal cada ~3 meses, ingresás el código una vez |
-| `docker compose up -d` dice *Started* pero la página no carga / da 404 | Mirá `docker logs bambu-history-bambu-history-1`. Si dice `Address already in use`, otro proceso tiene ese puerto: poné otro en `VIEWER_PORT`. Acordate de mirar `ss -tlnH` además de `docker ps`, porque un servicio nativo no aparece en Docker |
+| `docker compose up -d` dice *Started* pero la página no carga / da 404 | Mirá `docker logs bambu-history`. Si dice `Address already in use`, otro proceso tiene ese puerto: poné otro en `VIEWER_PORT`. Acordate de mirar `ss -tlnH` además de `docker ps`, porque un servicio nativo no aparece en Docker |
 | `KeyError` o falta de credenciales | Copiá `.env.example` a `.env` y completalo. Corriendo sin Docker, el `.env` tiene que estar en el directorio desde donde ejecutás |
+| `el .env todavía tiene los valores de ejemplo` | Abrí el `.env` y reemplazá `tu@email.com` / `tupassword` por los tuyos |
+| `Bambu rechazó el usuario o la contraseña` | Revisá que no haya quedado un espacio de más ni comillas alrededor del valor en el `.env` |
+| En el log: `el token no sirve más, re-autenticando` seguido de `no se pudo re-autenticar sin consola` | Bambu pide el código de 6 dígitos y el contenedor corre en segundo plano. Corré `docker compose run --rm bambu-history` una vez |
+| `LIMIT invalido (...): se usa 100` | Alguna variable numérica del `.env` tiene algo que no es un número (un comentario pegado al lado, por ejemplo). Sigue andando con el valor por defecto |
+| La página carga en blanco | Un título de impresión con `</script>` adentro rompía el visor. Arreglado: si lo ves, estás corriendo una versión vieja |
+| Da 403 al abrir una ruta | Es a propósito: el servidor no sirve dotfiles, listados de directorio ni nada fuera de `output/` |
 
 ---
 
