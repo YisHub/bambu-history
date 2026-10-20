@@ -1437,15 +1437,22 @@ def local_ip() -> str:
         s.close()
 
 
-def viewer_urls(port) -> tuple:
+def print_urls(port):
     """
-    (URL local, URL publica). Con PUBLIC_URL definida esa es la unica forma real
-    de entrar: detras de Cosmos el contenedor no publica puerto, asi que la IP
-    que ve local_ip() es la interna de Docker y no le sirve a nadie.
+    Imprime por donde se entra al visor. Con PUBLIC_URL (detras de un proxy con
+    login) esa es la unica puerta real: el contenedor no publica puerto, asi que
+    la IP que ve local_ip() es la interna de Docker y no le sirve a nadie.
+    Sin PUBLIC_URL -- corriendo a mano, o con el puerto publicado -- la que vale
+    es la del equipo, y ahi NO hay ningun login adelante.
     """
-    local = f"http://localhost:{port}/historial.html"
     publica = os.getenv("PUBLIC_URL", "").strip()
-    return (local, publica or f"http://{local_ip()}:{port}/historial.html")
+    print("=" * 60)
+    print(f"  Visor: http://localhost:{port}/historial.html")
+    if publica:
+        print(f"  Entrada publica (con login): {publica}")
+    else:
+        print(f"  Desde otro equipo o el telefono: http://{local_ip()}:{port}/historial.html")
+    print("=" * 60)
 
 
 def serve(token: str):
@@ -1495,11 +1502,8 @@ def serve(token: str):
         def log_message(self, fmt, *args):
             print(f"[http] {self.address_string()} {fmt % args}")
 
-    local, red = viewer_urls(port)
-    print(f"\n{'=' * 60}")
-    print(f"  Visor live: {local}")
-    print(f"  Entrada publica (con login): {red}")
-    print(f"{'=' * 60}")
+    print()
+    print_urls(port)
     print(f"Refresh: cada {interval}s o en cada reload del navegador (lo que pase antes)\n")
     HTTPServer(("", port), Handler).serve_forever()
 
@@ -1507,7 +1511,7 @@ def serve(token: str):
 def main():
     token = get_token()
     port = os.getenv("VIEWER_PORT", "8766")
-    local, red = viewer_urls(port)
+
 
     if os.getenv("SERVE", "0") == "1":
         serve(token)
@@ -1518,10 +1522,8 @@ def main():
             fetch_and_render(token)
         except Exception as e:
             print(f"Error en este ciclo: {e}")
-        print(f"\n{'=' * 60}")
-        print(f"  Visor: {local}")
-        print(f"  Entrada publica (con login): {red}")
-        print(f"{'=' * 60}")
+        print()
+        print_urls(port)
         if REFRESH_INTERVAL <= 0:
             return
         print(f"Próximo refresh en {REFRESH_INTERVAL}s...\n")
