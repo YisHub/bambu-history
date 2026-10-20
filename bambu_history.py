@@ -26,7 +26,14 @@ def load_env(ruta: str = ".env"):
             clave, valor = linea.split("=", 1)
             clave = clave.strip()
             if clave not in os.environ:
-                os.environ[clave] = valor.strip().strip("'\"")
+                valor = valor.strip()
+                # Un solo par de comillas coincidentes. .strip("'\"") sacaba
+                # CUALQUIER cantidad de comillas de los dos extremos, asi que una
+                # contraseña terminada en comilla quedaba mutilada y el login
+                # fallaba con un "usuario o contraseña incorrectos" inexplicable.
+                if len(valor) >= 2 and valor[0] == valor[-1] and valor[0] in "'\"":
+                    valor = valor[1:-1]
+                os.environ[clave] = valor
 
 
 load_env()
@@ -60,8 +67,24 @@ if EMAIL in ("tu@email.com", "tuemail@email.com") or PASSWORD == "tupassword":
     print("de Bambu Lab, guardá, y volvé a ejecutar.")
     sys.exit(1)
 
+def env_int(nombre: str, default: int) -> int:
+    """
+    int() de una variable de entorno, avisando en vez de reventar. Un LIMIT=50
+    con un comentario pegado al lado, o un espacio raro en el .env, tiraba un
+    traceback al importar el modulo: antes de cualquier mensaje amable.
+    """
+    crudo = os.getenv(nombre)
+    if crudo is None or crudo.strip() == "":
+        return default
+    try:
+        return int(crudo.strip())
+    except ValueError:
+        print(f"{nombre} invalido ({crudo!r}): se usa {default}")
+        return default
+
+
 DEVICE_ID  = os.getenv("BAMBU_DEVICE_ID", "")
-LIMIT      = int(os.getenv("LIMIT", "100"))
+LIMIT      = env_int("LIMIT", 100)
 PAGE_SIZE  = os.getenv("PAGE_SIZE", "auto").strip().lower()  # "auto" = llenar la pantalla
 SAVE_JSON  = os.getenv("SAVE_JSON", "1") == "1"
 # Dentro de Docker los volúmenes se montan en /output y /data; fuera, al lado
@@ -76,16 +99,16 @@ HTML_FILE  = f"{OUTPUT_DIR}/historial.html"
 PORTABLE_FILE = f"{OUTPUT_DIR}/historial-portable.html"
 COVERS_DIR = f"{OUTPUT_DIR}/covers"
 DB_FILE    = f"{DATA_DIR}/historial.db"          # acumulado histórico (no se sirve por HTTP)
-COVER_QUALITY = int(os.getenv("COVER_QUALITY", "82"))  # calidad WebP de las miniaturas
+COVER_QUALITY = env_int("COVER_QUALITY", 82)  # calidad WebP de las miniaturas
 # Esfuerzo del compresor WebP (0-6). Medido sobre estas miniaturas de 512x512:
 # method=6 tarda 742 ms por imagen y method=4 tarda 21 ms — 35 veces más rápido
 # para ahorrar 0,1 KB (1,4 %). El 6 no vale lo que cuesta.
-COVER_METHOD  = int(os.getenv("COVER_METHOD", "4"))
+COVER_METHOD  = env_int("COVER_METHOD", 4)
 # Las miniaturas se bajan de S3 una por una: es latencia pura, no CPU. En paralelo
 # el tiempo de una corrida con muchas nuevas cae de minutos a segundos.
-COVER_WORKERS = int(os.getenv("COVER_WORKERS", "8"))
+COVER_WORKERS = env_int("COVER_WORKERS", 8)
 PORTABLE      = os.getenv("PORTABLE", "1") == "1"  # archivo único que abre sin servidor
-REFRESH_INTERVAL = int(os.getenv("REFRESH_INTERVAL", "0"))
+REFRESH_INTERVAL = env_int("REFRESH_INTERVAL", 0)
 # ─────────────────────────────────────────────────────────────────────────────
 
 if PAGE_SIZE != "auto" and not PAGE_SIZE.isdigit():
@@ -112,8 +135,16 @@ def load_token() -> str | None:
             os.replace(LEGACY_TOKEN_FILE, TOKEN_FILE)
             print(f"  Token migrado: {LEGACY_TOKEN_FILE} → {TOKEN_FILE}")
         except OSError:
-            # Si /data no está montado (p.ej. instalación vieja), seguir con el legacy
-            return json.load(open(LEGACY_TOKEN_FILE)).get("token")
+            # Si /data no está montado (p.ej. instalación vieja), seguir con el
+            # legacy. Si ese archivo quedó truncado o vacío (plausible justo
+            # después de un os.replace fallido), mejor re-loguear que morir con
+            # un JSONDecodeError.
+            try:
+                with open(LEGACY_TOKEN_FILE) as f:
+                    return json.load(f).get("token")
+            except (OSError, ValueError) as err:
+                print(f"  Token viejo ilegible ({err}): re-autenticando.")
+                return None
     if not os.path.exists(TOKEN_FILE):
         return None
     with open(TOKEN_FILE) as f:
@@ -837,9 +868,13 @@ function ajustarPagina(rerender) {
 }
 
 // ── Utils ────────────────────────────────────────────────────────────────────
+// Se valida porque el valor termina interpolado dentro de style="..." en las
+// cards, el desglose y los graficos: un sourceColor con una comilla rompia el
+// atributo.
 function parseColor(c) {
   if (!c) return null;
-  return '#' + c.toString().replace('#','').slice(0,6).toUpperCase();
+  const hex = c.toString().replace('#','').slice(0,6).toUpperCase();
+  return /^[0-9A-F]{6}$/.test(hex) ? '#' + hex : null;
 }
 // Horas y gramos van en decimal con PUNTO: es lo que se copia y se pega en el
 // sistema de ventas, así que el número tiene que salir pelado y listo.
@@ -1184,8 +1219,14 @@ function renderPager(start, shown) {
   });
   add('›', page < pages ? page + 1 : 0);
 
-  // Ancho de slot fijo, calculado con los dígitos del número más largo
-  pager.style.setProperty('--pg-w', (22 + 8 * String(pages).length) + 'px');
+  // Ancho de slot fijo, calculado con los dígitos del número más largo. En
+  // teléfono NO se setea: un valor inline le gana al @media que sube los
+  // botones a 42px, y quedaban de 30-38px de ancho con 42 de alto.
+  if (window.innerWidth > 820) {
+    pager.style.setProperty('--pg-w', (22 + 8 * String(pages).length) + 'px');
+  } else {
+    pager.style.removeProperty('--pg-w');
+  }
   pager.innerHTML = info + '<div class="pg-btns">' + btns + '</div>';
 }
 
@@ -1345,7 +1386,7 @@ def slim_tasks(tasks: list) -> list:
     return salida
 
 
-def inline_covers(tasks: list) -> int:
+def inline_covers(tasks: list) -> tuple:
     """
     Reemplaza "covers/<id>.webp" por un data: URI con la imagen adentro. Es lo que
     convierte al visor en un archivo suelto: sin esto, fuera de su carpeta quedan
@@ -1399,7 +1440,11 @@ def generate_html(tasks: list, portable: bool = False) -> str:
         .replace("__REFRESH_SECS__", str(refresh_secs))
         .replace("__PAGE_SIZE__", str(PAGE_SIZE))
         .replace("__N__", str(len(datos)))
-        .replace("__TASKS_JSON__", json.dumps(datos, ensure_ascii=False))
+        # El "<\/" no es decoracion: json.dumps no escapa la barra, asi que un
+        # titulo con "</script>" adentro cerraba el bloque <script> y la pagina
+        # quedaba en blanco sin ningun error. En JSON "<\/" vale "</".
+        .replace("__TASKS_JSON__",
+                 json.dumps(datos, ensure_ascii=False).replace("</", "<\\/"))
     )
 
 
@@ -1474,27 +1519,65 @@ def print_urls(port):
     print("=" * 60)
 
 
+def force_login() -> str:
+    """Re-autentica de cero y guarda el token nuevo."""
+    t = do_login()
+    save_token(t)
+    return t
+
+
 def serve(token: str):
     """Modo servidor: atiende HTTP y regenera el HTML on-demand si está stale."""
     from http.server import HTTPServer, SimpleHTTPRequestHandler
+    from urllib.parse import unquote
     import threading
 
     port = int(os.getenv("VIEWER_PORT", "8766"))
     interval = max(REFRESH_INTERVAL, 60)  # nunca por debajo de 60s para no martirizar la API
-    last_render = 0.0
+    last_try = 0.0      # cuándo se INTENTÓ, no cuándo salió bien
     lock = threading.Lock()
+    estado = {"token": token}
+
+    def fetch_con_reauth():
+        """
+        Un fetch, y si la nube dice que el token no vale, re-autentica una vez.
+        El token dura ~3 meses: en modo servidor (que corre con
+        restart: unless-stopped) sin esto, al vencer, cada corrida fallaba y el
+        visor servía HTML viejo para siempre sin decir nada.
+        """
+        try:
+            fetch_and_render(estado["token"])
+        except requests.HTTPError as e:
+            code = e.response.status_code if e.response is not None else None
+            if code not in (401, 403):
+                raise
+            print(f"[auth] la nube respondió {code}: el token no sirve más, re-autenticando...")
+            # Ojo: si Bambu pide el código de 6 dígitos y no hay stdin (Docker
+            # con -d), esto falla. El mensaje tiene que decirlo.
+            try:
+                estado["token"] = force_login()
+            except (EOFError, OSError) as err:
+                print(f"[auth] no se pudo re-autenticar sin consola: {err}")
+                print("[auth] corré una vez a mano para meter el código: "
+                      "docker compose run --rm bambu-history")
+                raise
+            fetch_and_render(estado["token"])
 
     def maybe_refresh():
-        nonlocal last_render
+        nonlocal last_try
         with lock:
-            age = time.time() - last_render
-            if last_render == 0.0 or age >= interval:
-                print(f"[refresh] last_render hace {age:.0f}s, regenerando...")
-                try:
-                    fetch_and_render(token)
-                    last_render = time.time()
-                except Exception as e:
-                    print(f"[refresh] error: {e} (sirvo HTML cacheado si existe)")
+            age = time.time() - last_try
+            if last_try != 0.0 and age < interval:
+                return
+            # Se marca ANTES de intentar: si el fetch falla, no queremos que
+            # cada request siguiente vuelva a intentarlo. Con la página
+            # auto-recargándose, eso era martillar la API justo en una caída.
+            last_try = time.time()
+            print(f"[refresh] último intento hace {age:.0f}s, regenerando...")
+            try:
+                fetch_con_reauth()
+            except Exception as e:
+                print(f"[refresh] error: {e} (sirvo HTML cacheado si existe)")
 
     maybe_refresh()  # render inicial
 
@@ -1504,19 +1587,38 @@ def serve(token: str):
         def __init__(self, *a, **kw):
             super().__init__(*a, directory=output_dir, **kw)
 
+        def ruta_limpia(self) -> str:
+            """
+            El path sin query y ya decodificado. Las dos cosas importan:
+            `self.path` trae la query ("/?x=1" no es "/") y viene percent-
+            encoded, así que "/%2Ebambu_token" no parecía un dotfile mientras
+            translate_path() sí lo resolvía al archivo real.
+            """
+            sin_query = self.path.split("?", 1)[0].split("#", 1)[0]
+            return unquote(sin_query)
+
         def send_head(self):
+            ruta = self.ruta_limpia()
+
             # Defensa en profundidad: nunca servir dotfiles (cubre GET y HEAD)
-            if any(p.startswith(".") for p in self.path.split("/") if p):
+            if any(p.startswith(".") for p in ruta.split("/") if p):
                 self.send_error(403)
                 return None
-            if self.path in ("/", "/historial.html"):
+
+            if ruta in ("/", "/historial.html"):
                 maybe_refresh()
-            # La raiz sirve el visor. Sin esto se ve el listado del directorio,
-            # que ademas expone historial.json y covers/ a quien entre por el
-            # dominio.
-            if self.path == "/":
+
+            # La raíz sirve el visor, no el índice del directorio.
+            if ruta == "/":
                 self.path = "/historial.html"
+
             return super().send_head()
+
+        def list_directory(self, path):
+            # Nunca listar: dejaba ver historial.json y covers/ a cualquiera que
+            # pidiera un directorio (incluido "/" con query string).
+            self.send_error(403)
+            return None
 
         def log_message(self, fmt, *args):
             print(f"[http] {self.address_string()} {fmt % args}")
@@ -1539,6 +1641,17 @@ def main():
     while True:
         try:
             fetch_and_render(token)
+        except requests.HTTPError as e:
+            code = e.response.status_code if e.response is not None else None
+            if code in (401, 403):
+                print(f"La nube respondió {code}: el token venció, re-autenticando...")
+                try:
+                    token = force_login()
+                    fetch_and_render(token)
+                except Exception as err:
+                    print(f"No se pudo re-autenticar: {err}")
+            else:
+                print(f"Error en este ciclo: {e}")
         except Exception as e:
             print(f"Error en este ciclo: {e}")
         print()

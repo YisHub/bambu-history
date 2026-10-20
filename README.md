@@ -164,6 +164,10 @@ ports:
 
 La raíz (`/`) sirve el visor. Antes devolvía el listado del directorio, que dejaba ver `historial.json` y `covers/` a quien entrara.
 
+El servicio `viewer` (el del modo A) tiene el mismo endurecimiento y **se asoma solo a `127.0.0.1`**. Para abrirlo a la LAN, `BIND_ADDR=0.0.0.0` en el `.env`.
+
+En los dos casos el servidor rechaza con 403 los dotfiles (incluso escritos como `%2E`), los listados de directorio y cualquier ruta que intente salirse de `output/`.
+
 Corriendo **sin Docker** no aplica nada de esto: el script escucha en todas las interfaces del equipo, como cualquier servidor local.
 
 ---
@@ -217,6 +221,7 @@ Las que solo hacen falta en casos puntuales:
 | `COVER_WORKERS` | Descargas de miniaturas en paralelo (default 8) |
 | `REFRESH_INTERVAL` | Segundos entre refrescos (0 = una sola corrida) |
 | `VIEWER_TIMEOUT` | Auto-apagado del servicio `viewer` (`30m` por defecto, `0` = sin apagado) |
+| `BIND_ADDR` | A qué interfaz se asoma el servicio `viewer`. Por defecto `127.0.0.1` (solo esta máquina); `0.0.0.0` lo abre a la LAN |
 | `OUTPUT_DIR` / `DATA_DIR` | Forzar dónde se guardan los archivos |
 | `AM_I_IN_A_DOCKER_CONTAINER` | Escape: tratar el entorno como Docker aunque no haya `/.dockerenv` |
 

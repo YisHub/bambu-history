@@ -39,15 +39,44 @@ services:
       VIEWER_PORT: ${VIEWER_PORT:-8766}
     # VIEWER_TIMEOUT=0 → sin auto-apagado (queda hasta `docker compose down`)
     # cualquier otro valor → formato de `timeout` (ej. 30m, 2h, 90s)
+    # Mismo endurecimiento que el modo SERVE=1: `python -m http.server` pelado
+    # servia el listado del directorio Y los dotfiles, o sea historial.json,
+    # covers/ y cualquier .bambu_token que haya quedado en output/.
     command:
       - sh
       - -c
       - |
+        cat > /tmp/serve.py <<'PY'
+        import os
+        from http.server import HTTPServer, SimpleHTTPRequestHandler
+        from urllib.parse import unquote
+
+        class H(SimpleHTTPRequestHandler):
+            def ruta(self):
+                return unquote(self.path.split('?', 1)[0].split('#', 1)[0])
+
+            def send_head(self):
+                r = self.ruta()
+                if any(p.startswith('.') for p in r.split('/') if p):
+                    self.send_error(403)
+                    return None
+                if r == '/':
+                    self.path = '/historial.html'
+                return super().send_head()
+
+            def list_directory(self, path):
+                self.send_error(403)
+                return None
+
+        HTTPServer(('', int(os.environ.get('VIEWER_PORT', '8766'))), H).serve_forever()
+        PY
         if [ "$$VIEWER_TIMEOUT" = "0" ]; then
-          exec python -m http.server "$$VIEWER_PORT"
+          exec python /tmp/serve.py
         else
-          exec timeout "$$VIEWER_TIMEOUT" python -m http.server "$$VIEWER_PORT"
+          exec timeout "$$VIEWER_TIMEOUT" python /tmp/serve.py
         fi
+    # Solo localhost por defecto: el visor no pide ninguna credencial. Para
+    # abrirlo a la LAN, BIND_ADDR=0.0.0.0 en el .env (sabiendo lo que implica).
     ports:
-      - "${VIEWER_PORT:-8766}:${VIEWER_PORT:-8766}"
+      - "${BIND_ADDR:-127.0.0.1}:${VIEWER_PORT:-8766}:${VIEWER_PORT:-8766}"
     restart: "no"
