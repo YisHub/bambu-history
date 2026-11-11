@@ -109,6 +109,16 @@ COVER_METHOD  = env_int("COVER_METHOD", 4)
 COVER_WORKERS = env_int("COVER_WORKERS", 8)
 PORTABLE      = os.getenv("PORTABLE", "1") == "1"  # archivo único que abre sin servidor
 REFRESH_INTERVAL = env_int("REFRESH_INTERVAL", 0)
+# Progreso en vivo (cuanto falta): va por MQTT, el unico canal que lo publica.
+# MQTT_PROGRESO=0 lo apaga y el visor cae al estimado del slicer.
+MQTT_PROGRESO = os.getenv("MQTT_PROGRESO", "1") == "1"
+MQTT_HOST     = os.getenv("MQTT_HOST", "us.mqtt.bambulab.com")
+MQTT_PORT     = env_int("MQTT_PORT", 8883)
+# La impresora contesta el pushall en menos de un segundo; esperar mucho mas
+# solo hace esperar al navegador, porque en SERVE=1 el render corre dentro de
+# la peticion. MQTT_CACHE_SECS reusa la ultima lectura en rafagas de recargas.
+MQTT_TIMEOUT     = env_int("MQTT_TIMEOUT", 6)
+MQTT_CACHE_SECS  = env_int("MQTT_CACHE_SECS", 30)
 # ─────────────────────────────────────────────────────────────────────────────
 
 if PAGE_SIZE != "auto" and not PAGE_SIZE.isdigit():
@@ -259,6 +269,214 @@ def get_tasks(token: str) -> list:
             break
 
     return tasks
+
+
+# Lo que para la impresora todavia no termino. La nube NO actualiza el `status`
+# de la tarea mientras imprime: la deja como cancelada (4) con un `endTime` a los
+# pocos segundos del arranque, y el `status=1` como parametro de my/tasks lo
+# ignora. El unico lugar donde vive la verdad es el endpoint del dispositivo.
+EN_CURSO = {"RUNNING", "PAUSE", "PREPARE", "SLICING"}
+
+
+def get_jobs_en_curso(token: str) -> dict:
+    """{id_de_tarea: print_status} de lo que las impresoras estan haciendo ahora.
+
+    Nunca revienta el ciclo: si la nube no contesta, se devuelve vacio y el visor
+    sale como antes (con la tarea en curso mostrada como la nube la reporta).
+    """
+    try:
+        r = requests.get(
+            f"{BASE_URL}/v1/iot-service/api/user/bind",
+            headers={"Authorization": f"Bearer {token}"}, timeout=15,
+        )
+        r.raise_for_status()
+        devices = r.json().get("devices") or []
+    except Exception as e:
+        print(f"  [en curso] no se pudo consultar el estado de las impresoras: {e}")
+        return {}
+
+    jobs = {}
+    for d in devices:
+        estado = (d.get("print_status") or "").upper()
+        job    = d.get("print_job")
+        if estado in EN_CURSO and job:
+            try:
+                jobs[int(job)] = {"estado": estado, "dev_id": d.get("dev_id")}
+            except (TypeError, ValueError):
+                continue
+    return jobs
+
+
+def get_uid(token: str) -> int | None:
+    """uid de la cuenta, que es la mitad del usuario MQTT (u_<uid>)."""
+    try:
+        r = requests.get(
+            f"{BASE_URL}/v1/user-service/my/profile",
+            headers={"Authorization": f"Bearer {token}"}, timeout=15,
+        )
+        r.raise_for_status()
+        return r.json().get("uid")
+    except Exception as e:
+        print(f"  [progreso] no se pudo obtener el uid: {e}")
+        return None
+
+
+# Ultimo progreso leido, con su edad: en modo SERVE=1 el render corre dentro de
+# la peticion HTTP y con el lock tomado, asi que una rafaga de recargas pagaria
+# el timeout de MQTT una vez por recarga y dejaria al navegador esperando.
+_progreso_cache: dict = {"at": 0.0, "datos": {}}
+
+
+def get_progreso_mqtt(token: str, dev_ids: list) -> dict:
+    """{dev_id: {...progreso...}} preguntandole a la impresora por MQTT.
+
+    Es el unico canal que publica cuanto falta: por HTTP la nube solo dice si
+    esta online y que trabajo corre. Se conecta, pide un `pushall`, toma el
+    primer reporte con datos y corta; si algo falla devuelve {} y el visor cae
+    al estimado del slicer.
+    """
+    if not (MQTT_PROGRESO and dev_ids):
+        return {}
+
+    edad = time.time() - _progreso_cache["at"]
+    if edad < MQTT_CACHE_SECS and _progreso_cache["datos"]:
+        # Se devuelve con la edad adentro: el visor descuenta desde la medicion,
+        # no desde ahora, asi que reusarlo no adelanta el reloj.
+        return _progreso_cache["datos"]
+    try:
+        import paho.mqtt.client as mqtt
+    except ImportError:
+        print("  [progreso] falta paho-mqtt: sin tiempo restante real")
+        return {}
+
+    uid = get_uid(token)
+    if not uid:
+        return {}
+
+    pendientes = set(dev_ids)
+    datos: dict = {}
+
+    def on_connect(c, u, flags, rc, props=None):
+        # Sin esto, un token vencido se veia como "la impresora no publico
+        # progreso", que acusa a la impresora en vez del login.
+        if getattr(rc, "is_failure", False) or (isinstance(rc, int) and rc != 0):
+            print(f"  [progreso] MQTT rechazo la conexion ({rc}): revisa el token")
+            return
+        for dev in dev_ids:
+            c.subscribe(f"device/{dev}/report")
+            c.publish(f"device/{dev}/request",
+                      json.dumps({"pushing": {"sequence_id": "1", "command": "pushall"}}))
+
+    def on_message(c, u, msg):
+        try:
+            _on_message(c, u, msg)
+        except Exception as e:
+            # Lo que se escape de aca mata el hilo de red de paho y el progreso
+            # se pierde hasta agotar el timeout.
+            print(f"  [progreso] reporte MQTT ilegible: {e}")
+
+    def _on_message(c, u, msg):
+        d = json.loads(msg.payload).get("print")
+        if not isinstance(d, dict):
+            return
+        if "mc_percent" not in d and "mc_remaining_time" not in d:
+            return   # los reportes parciales no traen progreso
+        dev = msg.topic.split("/")[1]
+        # Si el reporte no trae `mc_remaining_time` queda None, NO 0: un 0
+        # pasaria por dato real y la card diria "Faltan menos de 1 min" en una
+        # impresion de tres horas. Sin el dato, el visor usa el estimado.
+        falta = d.get("mc_remaining_time")
+        datos[dev] = {
+            "percent":       d.get("mc_percent"),
+            "remainingSecs": falta * 60 if isinstance(falta, (int, float)) else None,
+            "layer":         d.get("layer_num"),
+            "totalLayer":    d.get("total_layer_num"),
+            "gcodeState":    d.get("gcode_state"),
+        }
+        pendientes.discard(dev)
+        if not pendientes:
+            c.disconnect()
+
+    cliente = None
+    try:
+        cliente = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,
+                              client_id=f"bambu-history-{int(time.time())}")
+        cliente.username_pw_set(f"u_{uid}", token)
+        cliente.tls_set()   # cert verificado con las CA del sistema (DigiCert)
+        cliente.on_connect, cliente.on_message = on_connect, on_message
+        cliente.connect(MQTT_HOST, MQTT_PORT, 30)
+        cliente.loop_start()
+        limite = time.time() + MQTT_TIMEOUT
+        while time.time() < limite and pendientes:
+            time.sleep(0.2)
+    except Exception as e:
+        print(f"  [progreso] MQTT no respondio ({e}): se usa el estimado del slicer")
+    finally:
+        if cliente is not None:
+            try:
+                cliente.loop_stop()
+                cliente.disconnect()
+            except Exception:
+                pass
+
+    if pendientes and not datos:
+        print("  [progreso] la impresora no publico progreso: se usa el estimado")
+    if datos:
+        _progreso_cache.update(at=time.time(), datos=datos)
+    return datos
+
+
+# Campos que existen solo para pintar la card en curso. No son historial: no
+# van al JSON ni, por lo tanto, a la base que el JSON siembra.
+CAMPOS_VIVOS = ("printStatus", "percent", "remainingSecs", "layer", "totalLayer",
+                "progressAt", "gcodeState", "statusNube")
+
+
+def marcar_en_curso(tasks: list, jobs: dict, progreso: dict | None = None) -> int:
+    """Pone status 1 (En progreso) en las tareas que la impresora sigue haciendo.
+
+    Es una correccion de presentacion, no se guarda en la base: ahi queda lo que
+    dijo la nube, y cuando la impresion termina de verdad el upsert lo corrige.
+    """
+    if not jobs:
+        return 0
+    progreso = progreso or {}
+    ahora_ms = int(time.time() * 1000)
+    n = 0
+    for t in tasks:
+        job = jobs.get(t.get("id"))
+        if not job:
+            continue
+        t["statusNube"] = t.get("status")   # para poder volver atras en el JSON
+        t["status"] = 1
+        t["printStatus"] = job["estado"]
+        pr = progreso.get(job.get("dev_id"))
+        if pr:
+            t.update({k: v for k, v in pr.items() if v is not None})
+            # El navegador descuenta desde este instante, asi que la cuenta
+            # sigue bajando entre refresh y refresh.
+            t["progressAt"] = ahora_ms
+        n += 1
+    return n
+
+
+def sin_marcas(tasks: list) -> list:
+    """Los mismos trabajos como los reporto la nube, sin la marca de en curso.
+
+    Es lo que se guarda en el JSON: ese archivo es historial y encima siembra la
+    base (`db_seed_from_json`), asi que un `status: 1` con una cuenta regresiva
+    vencida ahi adentro se volveria permanente si la base se borra o se estrena
+    en otra maquina.
+    """
+    salida = []
+    for t in tasks:
+        if "statusNube" not in t:
+            salida.append(t)
+            continue
+        limpio = {k: v for k, v in t.items() if k not in CAMPOS_VIVOS}
+        limpio["status"] = t["statusNube"]
+        salida.append(limpio)
+    return salida
 
 
 # ── BASE DE DATOS ─────────────────────────────────────────────────────────────
@@ -574,6 +792,12 @@ header h1{font-size:15px;font-weight:600;letter-spacing:-.2px;white-space:nowrap
 .card:hover{transform:translateY(-2px);border-color:#333933}
 .card.selected{background:var(--ac-bg);border:2px solid var(--ac)}
 .card.failed{border-color:#2E2122}
+.card.printing{border-color:var(--ac)}
+.card.printing .card-img,.card.printing .card-ph{animation:latido 2.4s ease-in-out infinite}
+@keyframes latido{0%,100%{opacity:1}50%{opacity:.62}}
+@media (prefers-reduced-motion:reduce){
+  .card.printing .card-img,.card.printing .card-ph{animation:none}
+}
 .card-img-wrap{position:relative;display:block}
 .card-img{display:block;width:100%;aspect-ratio:4/3;object-fit:cover;background:#0F110F}
 .card-ph{
@@ -584,8 +808,14 @@ header h1{font-size:15px;font-weight:600;letter-spacing:-.2px;white-space:nowrap
   position:absolute;top:9px;left:9px;padding:3px 8px;border-radius:5px;
   font-size:10px;font-weight:600;letter-spacing:.3px
 }
+.badge-1{background:rgba(10,30,18,.92);color:var(--ac)}
 .badge-3{background:rgba(43,14,16,.9);color:var(--bad)}
 .badge-4{background:rgba(11,13,11,.82);color:var(--tx-3)}
+.card-prog{display:flex;flex-direction:column;gap:4px}
+.prog-bar{height:4px;border-radius:3px;background:#1B1F1B;overflow:hidden}
+.prog-fill{height:100%;background:var(--ac);border-radius:3px;transition:width .4s}
+.prog-txt{font-size:11px;color:var(--ac)}
+.prog-txt.est{color:var(--tx-3)}
 .check{
   position:absolute;top:8px;right:8px;width:21px;height:21px;border-radius:50%;
   background:var(--ac);display:none;align-items:center;justify-content:center
@@ -1082,23 +1312,120 @@ function applyFilters() {
   const parts = [activeFil, activeCol].filter(Boolean);
   label.textContent = parts.length ? 'Gramos (solo ' + parts.join(' + ') + ')' : 'Gramos';
 
+  saveSel();            // lo que el filtro deseleccionó tampoco vuelve al recargar
   goToPage(1, false);   // al cambiar el filtro se vuelve a la página 1
   updateStats();
 }
 
 // ── Selección ────────────────────────────────────────────────────────────────
+// Se guarda por id de impresión, no por índice: el auto-refresh recarga la
+// página y, si entró una impresión nueva, los índices se corren. Va en
+// sessionStorage, así vive mientras viva la pestaña y no para siempre.
+const SEL_KEY  = 'bh-sel';
 const selected = new Set();
+
+function saveSel() {
+  try {
+    const ids = [...selected].map(i => tasks[i] && tasks[i].id).filter(id => id != null);
+    sessionStorage.setItem(SEL_KEY, JSON.stringify(ids));
+  } catch (e) { /* storage bloqueado: la selección queda solo en memoria */ }
+}
+function restoreSel() {
+  let ids = [];
+  try { ids = JSON.parse(sessionStorage.getItem(SEL_KEY) || '[]'); } catch (e) { return; }
+  if (!Array.isArray(ids) || !ids.length) return;
+  const porId = new Map();
+  tasks.forEach((t, i) => { if (t && t.id != null) porId.set(String(t.id), i); });
+  let faltan = false;
+  ids.forEach(id => {
+    const i = porId.get(String(id));
+    if (i === undefined) faltan = true;   // impresión que ya no está en la lista
+    else                 selected.add(i);
+  });
+  if (faltan) saveSel();
+}
 
 function selectVisible() {
   visibleIdx.forEach(i => selected.add(i));
   document.querySelectorAll('.card').forEach(c => c.classList.add('selected'));
+  saveSel();
   updateStats();
 }
 function clearAll() {
   selected.clear();
   document.querySelectorAll('.card').forEach(c => c.classList.remove('selected'));
+  saveSel();
   updateStats();
 }
+
+// ── Cuanto falta ─────────────────────────────────────────────────────────────
+// Dos fuentes: lo que publico la impresora por MQTT (real, y se le descuenta el
+// tiempo transcurrido desde la medicion) y, si eso no llego, el estimado del
+// slicer contra el reloj. El segundo se marca con "~" para no mentir.
+// El reloj del server y el del navegador no son el mismo: con el del visitante
+// corrido unos minutos, restar epochs daba una cuenta inventada. Se mide el
+// desfase una vez al cargar (la pagina se genera y se sirve en el acto) y
+// despues se trabaja siempre en la escala del server.
+const GEN_AT  = __GEN_AT__;
+const DESFASE = Date.now() - GEN_AT;
+function ahoraServer() { return Date.now() - DESFASE; }
+
+// Mas alla de esto la medicion ya no sirve para extrapolar: con REFRESH_SECS=0
+// la pestaña no se recarga nunca y el contador habria seguido bajando hasta
+// cero, mostrando "Terminando..." como si fuera un dato de la impresora.
+const EDAD_MAX_SECS = 15 * 60;
+
+function restanteDe(t) {
+  if (t.remainingSecs != null && t.progressAt) {
+    const edad = (ahoraServer() - t.progressAt) / 1000;
+    if (edad <= EDAD_MAX_SECS) {
+      // En pausa el tiempo no corre: se muestra lo que falta sin descontar.
+      const pausada = t.gcodeState === 'PAUSE' || t.printStatus === 'PAUSE';
+      const s = pausada ? t.remainingSecs : t.remainingSecs - edad;
+      return {secs: Math.max(0, s), real: true, pausada};
+    }
+  }
+  const ini = Date.parse(t.startTime);
+  if (!isNaN(ini) && t.costTime) {
+    const s = (ini + t.costTime * 1000 - ahoraServer()) / 1000;
+    if (s > 0) return {secs: s, real: false, pausada: false};
+  }
+  return null;
+}
+
+function fmtRestante(secs) {
+  const m = Math.round(secs / 60);
+  if (m < 1)  return 'menos de 1 min';
+  if (m < 60) return m + ' min';
+  return Math.floor(m / 60) + ' h ' + String(m % 60).padStart(2, '0') + ' m';
+}
+
+function progresoHTML(t) {
+  const r = restanteDe(t);
+  const pct = t.percent != null ? t.percent
+            : (r && t.costTime ? Math.round(100 * (1 - r.secs / t.costTime)) : null);
+  const capas = (t.layer && t.totalLayer) ? ' · capa ' + t.layer + '/' + t.totalLayer : '';
+  const txt = !r ? (t.printStatus === 'PAUSE' ? 'En pausa' : 'Terminando...')
+            : r.pausada ? 'En pausa · faltan ' + fmtRestante(r.secs)
+            : r.real    ? 'Faltan ' + fmtRestante(r.secs)
+            : '~' + fmtRestante(r.secs) + ' (estimado)';
+  const ancho = pct != null ? Math.max(0, Math.min(100, pct)) : 0;
+  return `
+    <div class="card-prog">
+      <div class="prog-bar"><div class="prog-fill" style="width:${ancho}%"></div></div>
+      <span class="prog-txt${r && r.real ? '' : ' est'}">${pct != null ? pct + ' % · ' : ''}${txt}${capas}</span>
+    </div>`;
+}
+
+// La cuenta baja sola entre un refresh y el siguiente
+setInterval(() => {
+  document.querySelectorAll('.card.printing').forEach(card => {
+    const t = tasks[card.dataset.idx];
+    if (!t) return;
+    const cont = card.querySelector('.card-prog');
+    if (cont) cont.outerHTML = progresoHTML(t);
+  });
+}, 30000);
 
 // ── Cards ────────────────────────────────────────────────────────────────────
 function buildCard(t, i) {
@@ -1106,12 +1433,14 @@ function buildCard(t, i) {
   card.className = 'card';
   card.dataset.idx = i;
   if (selected.has(i)) card.classList.add('selected');
+  if (t.status === 1) card.classList.add('printing');
   if (t.status === 3) card.classList.add('failed');
   if (t.status === 4) card.classList.add('cancelled');
 
   card.addEventListener('click', function () {
     if (selected.has(i)) { selected.delete(i); card.classList.remove('selected'); }
     else                 { selected.add(i);    card.classList.add('selected'); }
+    saveSel();
     updateStats();
   });
 
@@ -1120,7 +1449,10 @@ function buildCard(t, i) {
            onerror="this.parentNode.innerHTML='<div class=card-ph>·</div>'">`
     : `<div class="card-ph">·</div>`;
 
-  const badge = t.status === 3 ? '<span class="badge badge-3">FALLIDA</span>'
+  // En curso: lo que sale en pantalla es el estimado del slicer, todavia no un
+  // dato cerrado. Por eso el badge, que avisa que esa card va a cambiar.
+  const badge = t.status === 1 ? `<span class="badge badge-1">${t.printStatus === 'PAUSE' ? 'EN PAUSA' : 'EN CURSO'}</span>`
+              : t.status === 3 ? '<span class="badge badge-3">FALLIDA</span>'
               : t.status === 4 ? '<span class="badge badge-4">CANCELADA</span>'
               : '';
 
@@ -1146,6 +1478,7 @@ function buildCard(t, i) {
         <span class="card-dot" style="background:${hex}"></span>
       </div>
       <div class="card-sub num">${fmtDay(t.startTime)}${mats ? ' · ' + esc(mats) : ''}</div>
+      ${t.status === 1 ? progresoHTML(t) : ''}
     </div>`;
   return card;
 }
@@ -1319,6 +1652,7 @@ function initRange() {
     fmtDay(fechas[0]) + ' → ' + fmtDay(fechas[fechas.length - 1]);
 }
 
+restoreSel();         // antes de pintar: las cards nacen ya marcadas
 buildGlobalStats();
 buildFilters();
 initRange();
@@ -1369,7 +1703,9 @@ window.addEventListener('resize', () => {
 # el HTML pasa de 1,24 MB a 0,15 MB de datos.
 # `id` no lo usa el JS, pero es la clave de las miniaturas y la que va a necesitar
 # cualquier integración posterior (print-roi), así que se conserva.
-CAMPOS_TASK = ("id", "title", "startTime", "status", "costTime", "weight", "cover")
+CAMPOS_TASK = ("id", "title", "startTime", "status", "costTime", "weight", "cover",
+               "printStatus", "percent", "remainingSecs", "layer", "totalLayer",
+               "progressAt", "gcodeState")
 CAMPOS_AMS  = ("filamentType", "sourceColor", "weight")
 
 
@@ -1438,6 +1774,9 @@ def generate_html(tasks: list, portable: bool = False) -> str:
     return (
         HTML_TEMPLATE
         .replace("__REFRESH_SECS__", str(refresh_secs))
+        # Momento de generar la pagina: el visor lo usa para medir el desfase
+        # con su propio reloj y no para fechar nada.
+        .replace("__GEN_AT__", str(int(time.time() * 1000)))
         .replace("__PAGE_SIZE__", str(PAGE_SIZE))
         .replace("__N__", str(len(datos)))
         # El "<\/" no es decoracion: json.dumps no escapa la barra, asi que un
@@ -1466,14 +1805,21 @@ def fetch_and_render(token: str):
     if not tasks:
         print("Sin resultados.")
         return
-    print(f"{len(tasks)} trabajos en la base\n")
+
+    # Despues del upsert: lo que se guarda es lo que dijo la nube, lo que se
+    # muestra lleva el estado real de la impresora.
+    jobs     = get_jobs_en_curso(token)
+    dev_ids  = [j["dev_id"] for j in jobs.values() if j.get("dev_id")]
+    en_curso = marcar_en_curso(tasks, jobs, get_progreso_mqtt(token, dev_ids))
+    print(f"{len(tasks)} trabajos en la base"
+          + (f", {en_curso} en curso ahora" if en_curso else "") + "\n")
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     cache_covers(tasks)
 
     if SAVE_JSON:
         with open(JSON_FILE, "w", encoding="utf-8") as f:
-            json.dump(tasks, f, ensure_ascii=False, indent=2)
+            json.dump(sin_marcas(tasks), f, ensure_ascii=False, indent=2)
         print(f"JSON  → {JSON_FILE}")
 
     html = generate_html(tasks)
@@ -1484,7 +1830,9 @@ def fetch_and_render(token: str):
     # Versión de un solo archivo: se abre con doble clic, sin Docker y sin
     # servidor, y se puede mandar por Telegram tal cual.
     if PORTABLE:
-        portable_html = generate_html(tasks, portable=True)
+        # Sin la marca de en curso: el portable se abre con doble clic meses
+        # despues y una cuenta regresiva congelada ahi es puro mentir.
+        portable_html = generate_html(sin_marcas(tasks), portable=True)
         with open(PORTABLE_FILE, "w", encoding="utf-8") as f:
             f.write(portable_html)
         print(f"Único → {PORTABLE_FILE} ({os.path.getsize(PORTABLE_FILE)/1e6:.2f} MB)")

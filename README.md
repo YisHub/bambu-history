@@ -13,7 +13,8 @@ Descarga todas tus impresiones desde la nube, las muestra con thumbnails, filame
 - Genera una página web interactiva con:
   - **Grid de cards** con thumbnail de cada impresión
   - **Filtros** por tipo de filamento (PLA, PETG, ABS…) y por color
-  - **Selección** de impresiones con click
+  - **Selección** de impresiones con click, que **sobrevive al recargar** la página
+  - **Lo que se está imprimiendo ahora**, con cuánto falta, el porcentaje y la capa
   - **Horas y gramos de lo seleccionado**, en decimal y con un botón para copiar cada uno: es lo que se carga después en el sistema de ventas
   - **Desglose por tipo y color** de filamento, que es lo que cambia el precio
   - **Grid que llena la pantalla**: muestra tantas cards como entren, sin dejar hueco abajo
@@ -29,6 +30,7 @@ Descarga todas tus impresiones desde la nube, las muestra con thumbnails, filame
 
 - Una cuenta de Bambu Lab
 - [Docker](https://docs.docker.com/engine/install/), **o** Python 3.12+ si preferís correrlo a mano (ver [Correr sin Docker](#correr-sin-docker))
+- Dependencias (las instala el Dockerfile): `requests`, `Pillow` y `paho-mqtt` (este último solo para el progreso en vivo; sin él todo lo demás anda igual)
 
 > **Windows**: lo más simple es doble clic en `bambu-history.bat`, que no necesita Docker. Ver [sección Windows](#windows) al final.
 
@@ -220,6 +222,10 @@ Las que solo hacen falta en casos puntuales:
 | `COVER_METHOD` | Esfuerzo del compresor WebP (0-6, default 4). El 6 tarda 35× más para ahorrar 1,4 % |
 | `COVER_WORKERS` | Descargas de miniaturas en paralelo (default 8) |
 | `REFRESH_INTERVAL` | Segundos entre refrescos (0 = una sola corrida) |
+| `MQTT_PROGRESO=0` | Apagar el progreso en vivo de las impresiones en curso (por defecto está prendido) |
+| `MQTT_HOST` | Broker de Bambu (`us.mqtt.bambulab.com` por defecto; cuentas de China: `cn.mqtt.bambulab.com`) |
+| `MQTT_PORT` / `MQTT_TIMEOUT` | Puerto (8883) y segundos de espera del reporte (6) |
+| `MQTT_CACHE_SECS` | Cuánto se reusa la última lectura de progreso (30 s) |
 | `VIEWER_TIMEOUT` | Auto-apagado del servicio `viewer` (`30m` por defecto, `0` = sin apagado) |
 | `BIND_ADDR` | A qué interfaz se asoma el servicio `viewer`. Por defecto `127.0.0.1` (solo esta máquina); `0.0.0.0` lo abre a la LAN |
 | `OUTPUT_DIR` / `DATA_DIR` | Forzar dónde se guardan los archivos |
@@ -308,7 +314,38 @@ Pasar de página no debería obligarte a reapuntar el mouse, así que:
 - **"Seleccionar visibles"** → selecciona **todo lo filtrado**, no solo la página a la vista
 - **"Limpiar selección"** → deselecciona todo
 
-La selección se mantiene al cambiar de página y se recorta sola si un filtro deja algo afuera.
+La selección se mantiene al cambiar de página, **sobrevive al recargar** y se recorta sola si un
+filtro deja algo afuera. Se guarda por id de impresión en `sessionStorage`: dura mientras dure la
+pestaña y no se mezcla entre pestañas ni con el portable (cada origen tiene su propio storage).
+Se guarda por id y no por posición porque el auto-refresh recarga la página y, si entró una
+impresión nueva, las posiciones se corren.
+
+### Impresiones en curso
+
+La card de lo que la impresora está haciendo ahora lleva badge **EN CURSO** (o **EN PAUSA**), borde
+de acento, y una barra con el porcentaje, cuánto falta y la capa.
+
+Hay dos fuentes, porque la nube miente:
+
+| Fuente | Qué da |
+|---|---|
+| `my/tasks` (el historial) | Reporta la impresión activa como **cancelada**, con un `endTime` a los pocos segundos del arranque. No sirve para saber qué está corriendo |
+| `iot-service/api/user/bind` | `print_status` + `print_job`: qué trabajo corre de verdad. De acá sale el badge |
+| MQTT (`us.mqtt.bambulab.com`, usuario `u_<uid>`) | `mc_remaining_time`, `mc_percent` y la capa. Es el único canal que publica el progreso |
+
+Detalles que importan:
+
+- La corrección **no se guarda**: en la base y en `historial.json` queda lo que dijo la nube, y
+  cuando la impresión termina el upsert la pasa a completada sola.
+- Si MQTT no contesta (o se apagó con `MQTT_PROGRESO=0`), el visor cae al estimado del slicer
+  (`startTime + costTime`) y lo muestra como `~49 min (estimado)`, nunca como dato real.
+- El contador baja solo cada 30 s en el navegador, descontando desde el momento de la medición y
+  en la escala de reloj del server. Si la medición tiene más de 15 minutos, deja de extrapolar y
+  vuelve al estimado.
+- El portable sale siempre sin progreso: se abre meses después y una cuenta regresiva congelada ahí
+  sería pura mentira.
+- Los gramos y las horas de una impresión en curso son el estimado del slicer y suman en los
+  totales si la seleccionás.
 
 ### Horas y gramos (arriba del lateral)
 
@@ -440,6 +477,7 @@ Pesa **menos** que lo que reemplaza, porque el JSON va podado a los campos que e
 
 - Si una miniatura no se puede embeber, esa portada se descarta en vez de dejar adentro la URL firmada de S3 (que caduca a los 30 min y apunta a tus modelos privados).
 - No tiene auto-refresh: no hay servidor que le sirva nada nuevo.
+- **No lleva las impresiones en curso**: se abre meses después y una cuenta regresiva congelada sería pura mentira. Lo que esté imprimiendo sale con el estado que dio la nube.
 - Se apaga con `PORTABLE=0`.
 
 > ⚠️ Lleva adentro tus miniaturas y los títulos reales de los trabajos. Fijate a quién se lo pasás.
@@ -455,6 +493,10 @@ Por eso el flujo es acumulativo:
 1. Se pide a la nube lo que haya (paginado de a 50, hasta `LIMIT`).
 2. Se hace *upsert* en `data/historial.db` por `id`: lo nuevo entra, lo conocido se actualiza, y lo que ya no está en la nube **se queda en la base**.
 3. El visor y el `historial.json` se generan con **todo** lo acumulado.
+
+En la base y en el JSON queda **lo que dijo la nube**. La marca de "en curso" es solo de
+presentación y se saca antes de escribir el JSON, porque ese archivo también siembra la base la
+primera vez (ver [Impresiones en curso](#impresiones-en-curso)).
 
 La primera corrida con la base vacía importa el `output/historial.json` que existiera de antes, así no se arranca perdiendo lo ya bajado.
 
@@ -486,6 +528,10 @@ sqlite3 data/historial.db "SELECT start_time, title FROM tasks ORDER BY start_ti
 | `LIMIT invalido (...): se usa 100` | Alguna variable numérica del `.env` tiene algo que no es un número (un comentario pegado al lado, por ejemplo). Sigue andando con el valor por defecto |
 | La página carga en blanco | Un título de impresión con `</script>` adentro rompía el visor. Arreglado: si lo ves, estás corriendo una versión vieja |
 | Da 403 al abrir una ruta | Es a propósito: el servidor no sirve dotfiles, listados de directorio ni nada fuera de `output/` |
+| La impresión que está corriendo aparece como **CANCELADA** | Es lo que responde la nube: no actualiza el estado de la tarea mientras imprime. El visor lo corrige cruzándolo con el estado de la impresora; si lo seguís viendo, estás corriendo una versión vieja |
+| La card en curso no dice cuánto falta, o dice `~49 min (estimado)` | No llegó el reporte MQTT: impresora offline, `MQTT_PROGRESO=0`, falta `paho-mqtt` (reconstruí la imagen) o la cuenta es de la región China y necesita `MQTT_HOST=cn.mqtt.bambulab.com`. Mirá el log: avisa el motivo |
+| En el log: `MQTT rechazo la conexion` | El token no sirve para el broker. Borrá `data/.bambu_token` y volvé a loguearte |
+| La selección se pierde al abrir otra pestaña | Es por diseño: vive en el `sessionStorage` de esa pestaña. Dentro de la misma pestaña sobrevive a los recargues |
 
 ---
 
